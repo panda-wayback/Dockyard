@@ -9,11 +9,13 @@
   - 可填写/修改 MCP 服务器自己的访问网址，默认取当前页面的访问地址。
   - 按该网址实时生成 `mcpServers` JSON（streamable-http，含 `url` 字段），可一键复制。
 - 把生成的 JSON 加入 Cursor 等 IDE 的 MCP 配置后，可通过 MCP 工具：
-  - 给定宿主机上的项目目录、镜像名、tag，执行构建并推送到本仓库（tag 为 `<registry 地址>/<镜像名>:<tag>`）。
-  - 列出仓库中的镜像与 tag。
+  - 给定宿主机上的项目目录、镜像名、tag，执行构建并推送到本仓库（tag 为 `<registry 地址>/<镜像名>:<tag>`），可同时填写镜像简介与功能说明。
+  - 列出仓库中的镜像、tag 与简介。
+  - 按关键字查找镜像（镜像名、简介、功能说明）。
 - 推送到的 registry 地址沿用部署时的 `REGISTRY_PORT`（默认 `localhost:20070`）。
 
 ## 方案
+- 子功能：[镜像简介与搜索](image-meta/README.md)，上传时带简介与功能说明，并按关键字查找镜像。
 - 新增：Module `mcp-server/`，职责为提供配置页与 streamable-http MCP 端点，并通过宿主机 Docker 完成构建/推送、通过仓库 API 列出镜像。
 - 修改：根 Module（项目根目录）的 compose 增加 mcp 服务、`MCP_PORT` 环境变量与集成测试。
 - MCP 服务挂载 `/var/run/docker.sock`（在宿主机 Docker 上执行 build/push）与宿主机 HOME（让容器内能访问项目目录，macOS 下容器内外路径一致）。

@@ -13,8 +13,10 @@ REGISTRY="localhost:${REGISTRY_PORT}"
 UI="http://localhost:${UI_PORT}"
 MCP="http://localhost:${MCP_PORT}"
 REPO="mcpdock-it/hello"
+MCP_REPO="mcpdock-it/mcp-hello"
 TAG="it-tag"
 IMAGE="${REGISTRY}/${REPO}:${TAG}"
+MCP_IMAGE="${REGISTRY}/${MCP_REPO}:${TAG}"
 CONTENT="mcpdock-it-$(date +%s)-$RANDOM"
 ACCEPT="application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json"
 
@@ -22,10 +24,29 @@ compose() { docker compose -f "$ROOT/docker-compose.yml" --project-directory "$R
 
 cleanup() {
   compose down -v >/dev/null 2>&1 || true
-  docker rmi -f "$IMAGE" >/dev/null 2>&1 || true
+  docker rmi -f "$IMAGE" "$MCP_IMAGE" >/dev/null 2>&1 || true
   rm -rf "$REGISTRY_DATA_DIR" "$WORK_DIR"
 }
 trap cleanup EXIT
+
+mcp_call() {  # $@ 透传给内嵌 python：tool 与参数，stdout 输出 result 文本
+  python3 - "$MCP/mcp" "$@" <<'PY'
+import json
+import sys
+import urllib.request
+
+url = sys.argv[1]
+tool = sys.argv[2]
+args = json.loads(sys.argv[3])
+msg = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+       "params": {"name": tool, "arguments": args}}
+req = urllib.request.Request(
+    url, data=json.dumps(msg).encode(),
+    headers={"Content-Type": "application/json"})
+with urllib.request.urlopen(req) as resp:
+    print(json.dumps(json.load(resp), ensure_ascii=False))
+PY
+}
 
 pass() { echo "PASS: $1"; }
 fail() { echo "FAIL: $1" >&2; exit 1; }
@@ -40,7 +61,7 @@ wait_ok() {
 }
 
 start() {
-  compose up -d >/dev/null
+  compose up -d --build >/dev/null
   wait_ok "http://${REGISTRY}/v2/"
   wait_ok "${UI}/v2/"
   wait_ok "${MCP}/"
@@ -65,6 +86,7 @@ TLIST="$(curl -s -X POST "${MCP}/mcp" -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')"
 echo "$TLIST" | grep -q "build_and_push" || fail "MCP tools/list 缺少 build_and_push"
 echo "$TLIST" | grep -q "list_images" || fail "MCP tools/list 缺少 list_images"
+echo "$TLIST" | grep -q "search_images" || fail "MCP tools/list 缺少 search_images"
 pass "MCP 配置页与 /mcp 端点（initialize、tools/list）"
 
 # push
@@ -88,11 +110,46 @@ docker rm "$CID" >/dev/null
 [ "$(cat "$WORK_DIR/pulled.txt")" = "$CONTENT" ] || fail "pull 回来的内容与 push 的不一致"
 pass "docker pull 内容一致"
 
+# 通过 MCP build_and_push 带简介推送（项目放在 HOME 下，mcp 容器已挂载 HOME）
+MCP_PROJ="${HOME}/.mcpdock-it-$$"
+mkdir -p "$MCP_PROJ"
+printf '# Hello MCP\n\n一个演示问候服务。\n' > "$MCP_PROJ/README.md"
+printf 'FROM scratch\nCOPY README.md /README.md\n' > "$MCP_PROJ/Dockerfile"
+MCP_SUMMARY="演示用问候镜像"
+MCP_FEATURES="内置 README，提供问候与演示功能。"
+ARGS="$(python3 - "$MCP_PROJ" "$MCP_REPO" "$TAG" "$MCP_SUMMARY" "$MCP_FEATURES" <<'PY'
+import json, sys
+print(json.dumps({"project_dir": sys.argv[1], "image": sys.argv[2],
+                  "tag": sys.argv[3], "summary": sys.argv[4],
+                  "features": sys.argv[5]}))
+PY
+)"
+RESP="$(mcp_call build_and_push "$ARGS")"
+echo "$RESP" | grep -q "\"reference\": \"${MCP_IMAGE}\"" \
+  || fail "MCP build_and_push 未返回正确 reference：$RESP"
+echo "$RESP" | grep -q "sha256:" || fail "MCP build_and_push 未返回 digest：$RESP"
+pass "MCP build_and_push 带简介推送成功"
+
+# MCP 列表带简介
+RESP="$(mcp_call list_images '{}')"
+echo "$RESP" | grep -q "\"name\": \"${MCP_REPO}\"" || fail "MCP 列表缺少 ${MCP_REPO}：$RESP"
+echo "$RESP" | grep -q "$MCP_SUMMARY" || fail "MCP 列表缺少简介：$RESP"
+pass "MCP list_images 返回镜像与简介"
+
+# MCP 按功能说明搜索
+RESP="$(mcp_call search_images '{"keyword": "问候"}')"
+echo "$RESP" | grep -q "\"name\": \"${MCP_REPO}\"" || fail "搜索 '问候' 未命中：$RESP"
+pass "MCP search_images 按简介关键字查找"
+
 # 持久化
 compose down >/dev/null
 start
 tags | grep -q "\"${TAG}\"" || fail "down 后重新 up，tag 丢失"
-pass "数据持久化"
+RESP="$(mcp_call search_images '{"keyword": "问候"}')"
+echo "$RESP" | grep -q "$MCP_SUMMARY" || fail "重启后简介丢失：$RESP"
+pass "数据与镜像简介持久化"
+
+rm -rf "$MCP_PROJ"
 
 # 通过 UI 删除 tag
 DIGEST="$(curl -s -I -H "Accept: ${ACCEPT}" "${UI}/v2/${REPO}/manifests/${TAG}" \

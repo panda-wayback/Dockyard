@@ -8,13 +8,43 @@ import json
 import os
 import re
 import subprocess
+import tempfile
+import threading
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 REGISTRY_ADDRESS = os.environ.get("REGISTRY_ADDRESS", "localhost:20070")
 REGISTRY_API = os.environ.get("REGISTRY_API", "http://localhost:20070").rstrip("/")
+META_DIR = os.environ.get("META_DIR", "/data")
+META_FILE = os.path.join(META_DIR, "images.json")
 PORT = int(os.environ.get("PORT", "8080"))
+
+_meta_lock = threading.Lock()
+
+
+def load_meta():
+    try:
+        with open(META_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (FileNotFoundError, ValueError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_meta(meta):
+    os.makedirs(META_DIR, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=META_DIR)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(meta, fh, ensure_ascii=False)
+        os.replace(tmp, META_FILE)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 # 镜像名：小写字母数字段，段内允许 . _ -，段间用 /
 NAME_RE = re.compile(
@@ -84,6 +114,9 @@ TOOLS = [
             "构建一个 Docker 项目并推送到 MCPDock 私有仓库。"
             "project_dir 是宿主机上含 Dockerfile 的项目目录绝对路径，"
             "image 是仓库内镜像名（可含 / 路径），tag 是标签。"
+            "调用前必须先阅读 project_dir 下的 README、文档与代码，"
+            "自行提炼 summary（镜像一句话简介）与 features（功能说明），"
+            "不要向用户询问这两项。"
             "成功后返回推送引用 reference 与 digest。"
         ),
         "inputSchema": {
@@ -93,17 +126,36 @@ TOOLS = [
                                 "description": "宿主机上项目目录的绝对路径"},
                 "image": {"type": "string", "description": "仓库内镜像名"},
                 "tag": {"type": "string", "description": "镜像标签"},
+                "summary": {"type": "string",
+                            "description": "镜像一句话简介，阅读项目后自行提炼"},
+                "features": {"type": "string",
+                             "description": "镜像功能说明，阅读项目后自行提炼"},
             },
-            "required": ["project_dir", "image", "tag"],
+            "required": ["project_dir", "image", "tag", "summary", "features"],
             "additionalProperties": False,
         },
     },
     {
         "name": "list_images",
-        "description": "列出私有仓库中的全部镜像及其 tag。",
+        "description": "列出私有仓库中的全部镜像及其 tag、简介与功能说明。",
         "inputSchema": {
             "type": "object",
             "properties": {},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "search_images",
+        "description": (
+            "按关键字查找私有仓库中的镜像，"
+            "在镜像名、简介 summary 与功能说明 features 中做大小写不敏感匹配。"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "keyword": {"type": "string", "description": "查找关键字"},
+            },
+            "required": ["keyword"],
             "additionalProperties": False,
         },
     },
@@ -124,11 +176,17 @@ def build_and_push(arguments):
     project_dir = arguments["project_dir"].strip()
     image = arguments["image"].strip()
     tag = arguments["tag"].strip()
+    summary = arguments["summary"].strip()
+    features = arguments["features"].strip()
 
     if not NAME_RE.match(image):
         raise ValueError("image 不是合法的镜像名")
     if not TAG_RE.match(tag):
         raise ValueError("tag 不是合法的标签")
+    if not summary:
+        raise ValueError("summary 不能为空")
+    if not features:
+        raise ValueError("features 不能为空")
     if not os.path.isdir(project_dir):
         raise ToolError("PROJECT_NOT_FOUND", f"目录不存在：{project_dir}")
     if not os.path.isfile(os.path.join(project_dir, "Dockerfile")):
@@ -147,12 +205,20 @@ def build_and_push(arguments):
         raise ToolError("PUSH_FAILED",
                         (push.stdout + push.stderr).strip()[-2000:])
 
+    try:
+        with _meta_lock:
+            meta = load_meta()
+            meta[image] = {"summary": summary, "features": features}
+            save_meta(meta)
+    except OSError as exc:
+        raise ToolError("META_WRITE_FAILED", str(exc))
+
     match = re.search(r"digest:\s*(sha256:[0-9a-f]+)", push.stdout)
     return {"reference": reference,
             "digest": match.group(1) if match else ""}
 
 
-def list_images(_arguments):
+def _catalog_repositories():
     try:
         with urllib.request.urlopen(f"{REGISTRY_API}/v2/_catalog",
                                     timeout=10) as resp:
@@ -160,6 +226,7 @@ def list_images(_arguments):
     except (urllib.error.URLError, OSError) as exc:
         raise ToolError("REGISTRY_UNAVAILABLE", str(exc))
 
+    meta = load_meta()
     repositories = []
     for name in catalog.get("repositories", []):
         quoted = urllib.request.quote(name, safe="/")
@@ -170,14 +237,37 @@ def list_images(_arguments):
                 tags_data = json.load(resp)
         except (urllib.error.URLError, OSError) as exc:
             raise ToolError("REGISTRY_UNAVAILABLE", str(exc))
-        repositories.append({"name": name,
-                             "tags": tags_data.get("tags") or []})
-    return {"repositories": repositories}
+        info = meta.get(name, {})
+        repositories.append({
+            "name": name,
+            "tags": tags_data.get("tags") or [],
+            "summary": info.get("summary", ""),
+            "features": info.get("features", ""),
+        })
+    return repositories
+
+
+def list_images(_arguments):
+    return {"repositories": _catalog_repositories()}
+
+
+def search_images(arguments):
+    keyword = arguments["keyword"].strip().lower()
+    if not keyword:
+        raise ValueError("keyword 不能为空")
+    matched = [
+        repo for repo in _catalog_repositories()
+        if keyword in repo["name"].lower()
+        or keyword in repo["summary"].lower()
+        or keyword in repo["features"].lower()
+    ]
+    return {"repositories": matched}
 
 
 TOOL_IMPL = {
     "build_and_push": build_and_push,
     "list_images": list_images,
+    "search_images": search_images,
 }
 
 
