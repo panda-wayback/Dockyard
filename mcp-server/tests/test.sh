@@ -59,7 +59,7 @@ docker build -q -t "$LOCAL_IMAGE" "$WORK_DIR/proj" >/dev/null
 docker save -o "$WORK_DIR/image.tar" "$LOCAL_IMAGE"
 printf 'not a tar' > "$WORK_DIR/garbage.tar"
 
-export SPORT WORK_DIR REPO REPO2 TAG PULLED REFERENCE2 CONTENT
+export SPORT WORK_DIR REPO REPO2 TAG PULLED REFERENCE2 CONTENT REGNAME
 
 python3 - <<'PY'
 import json
@@ -115,11 +115,16 @@ def expect(cond, msg):
     if not cond:
         raise AssertionError(msg)
 
+def page_text():
+    with urllib.request.urlopen(f"{BASE}/") as resp:
+        expect(resp.status == 200, f"GET / 状态异常：{resp.status}")
+        return resp.read().decode()
+
 # 配置页
-with urllib.request.urlopen(f"{BASE}/") as resp:
-    page = resp.read().decode()
+page = page_text()
 expect("<html" in page and "mcpServers" in page, "配置页内容不正确")
-print("PASS: GET / 返回配置页")
+expect('id="filter"' in page, "页面缺少筛选框")
+print("PASS: GET / 返回配置页与筛选框")
 
 # initialize
 r = rpc("initialize", {})
@@ -139,6 +144,8 @@ print("PASS: tools/list 返回三个工具，说明含上传地址")
 expect(payload_of(call("list_images", {}))["repositories"] == [],
        "空仓库应返回空列表")
 print("PASS: list_images 空仓库")
+expect("暂无镜像" in page_text(), "空仓库页面应显示暂无镜像")
+print("PASS: GET / 空仓库显示暂无镜像")
 
 # 上传 docker save 文件
 status, body = upload(f"{WORK_DIR}/image.tar", REPO, TAG)
@@ -198,6 +205,20 @@ expect(payload_of(call("search_images", {"keyword": "不存在xyz"}))
        ["repositories"] == [], "无匹配应返回空列表")
 print("PASS: search_images 按名称与简介查找")
 
+# 网页镜像列表
+page = page_text()
+for text in (REPO, TAG, SUMMARY, "输出问候", REPO2, "未登记"):
+    expect(text in page, f"页面缺少 {text!r}")
+print("PASS: GET / 列出镜像、tag、简介，未登记的标明未登记")
+
+r = call("set_image_info", {"image": REPO2, "summary": "<b>粗体</b>",
+                            "features": "a & b"})
+expect(not r["result"].get("isError"), f"登记失败：{r}")
+page = page_text()
+expect("&lt;b&gt;粗体&lt;/b&gt;" in page and "<b>粗体" not in page,
+       "页面未对简介做 HTML 转义")
+print("PASS: GET / 简介内容经 HTML 转义")
+
 # 错误：上传参数不合法
 status, body = upload(f"{WORK_DIR}/image.tar", "Bad Name", TAG)
 expect(status == 400 and body["error"] == "INVALID_ARGUMENT",
@@ -232,6 +253,14 @@ print("PASS: 参数缺失或空白返回 -32602")
 r = rpc("no/such", {})
 expect(r["error"]["code"] == -32601, f"应返回方法不存在：{r}")
 print("PASS: 未知方法返回 -32601")
+
+# 仓库不可访问：页面仍可用
+subprocess.run(["docker", "stop", os.environ["REGNAME"]], check=True,
+               stdout=subprocess.DEVNULL)
+page = page_text()
+expect("mcpServers" in page and "仓库不可访问" in page,
+       "仓库不可访问时页面应显示配置区与错误信息")
+print("PASS: 仓库不可访问时 GET / 仍返回配置区并提示错误")
 PY
 
 pass "mcp-server 全部用例"

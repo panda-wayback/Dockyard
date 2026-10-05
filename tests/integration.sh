@@ -153,6 +153,9 @@ RESP="$(mcp_call search_images '{"keyword": "问候"}')"
 echo "$RESP" | grep -q "\"name\": \"${MCP_REPO}\"" || fail "搜索 '问候' 未命中：$RESP"
 pass "MCP search_images 按简介关键字查找"
 
+curl -s "${MCP}/" | grep -q "$MCP_SUMMARY" || fail "MCP 网页镜像列表缺少简介"
+pass "MCP 网页镜像列表显示简介"
+
 # 持久化
 compose down >/dev/null
 start

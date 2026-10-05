@@ -8,6 +8,7 @@
 - 浏览器打开 MCP 服务器根路径看到配置页：
   - 可填写/修改 MCP 服务器自己的访问网址，默认取当前页面的访问地址。
   - 按该网址实时生成 `mcpServers` JSON（streamable-http，含 `url` 字段），可一键复制。
+  - 下方显示仓库镜像列表，含简介与功能说明，可按关键字筛选。
 - 把生成的 JSON 加入 Cursor 等 IDE 的 MCP 配置后：
   - AI 在本机 `docker build` 并把镜像导出为文件，经 HTTP 上传给 MCP 服务器，由服务器推入本仓库；上传方式（含上传地址）写在 MCP 工具说明中，按客户端访问 MCP 服务器的地址自动生成。
   - 上传后通过 MCP 工具登记该镜像的简介与功能说明。
@@ -16,6 +17,7 @@
 
 ## 方案
 - 子功能：[镜像简介与搜索](image-meta/README.md)，上传后登记简介与功能说明，并按关键字查找镜像。
+- 子功能：[镜像简介网页](image-page/README.md)，在配置页下方浏览镜像简介并按关键字筛选。
 - 新增：Module `mcp-server/`，职责为提供配置页、streamable-http MCP 端点与镜像上传端点；上传的镜像经仓库 HTTP API 推入本仓库，通过仓库 API 列出镜像，并保存镜像简介。
 - 修改：根 Module（项目根目录）的 compose 增加 mcp 服务、`MCP_PORT` 环境变量与集成测试；mcp 服务经 compose 内网访问仓库，不挂载 Docker socket。
 - 配置页的网址只在浏览器端拼接，服务端不保存任何配置。

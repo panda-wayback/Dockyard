@@ -4,6 +4,7 @@
 仅依赖 Python 标准库；上传的镜像经仓库 HTTP API 推入，不使用 Docker。
 """
 import hashlib
+import html
 import json
 import os
 import re
@@ -54,6 +55,16 @@ CONFIG_PAGE = """<!doctype html>
   button:hover { background: #1d4ed8; }
   #status { margin-left: 10px; color: #059669; }
   .hint { margin-top: 20px; color: #6b7280; font-size: 14px; line-height: 1.6; }
+  h2 { font-size: 18px; margin-top: 40px; }
+  .img { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px;
+         margin: 12px 0; }
+  .img .name { font-weight: 600; font-size: 16px; }
+  .img .tags { margin-left: 8px; color: #6b7280; font-size: 13px; }
+  .img .summary { margin: 8px 0 4px; }
+  .img .features { white-space: pre-wrap; color: #374151; font-size: 14px;
+                   line-height: 1.6; }
+  .muted { color: #9ca3af; }
+  .error { color: #dc2626; }
 </style>
 </head>
 <body>
@@ -66,7 +77,16 @@ CONFIG_PAGE = """<!doctype html>
   把 JSON 添加到 Cursor 的 MCP 配置（设置 → MCP，或编辑
   <code>~/.cursor/mcp.json</code>）。保存后 AI 即可把项目镜像上传到本仓库并登记简介。
 </p>
+<h2>仓库镜像</h2>
+<input id="filter" placeholder="按镜像名、简介、功能说明筛选" spellcheck="false" autocomplete="off">
+<div id="images"><!--IMAGES--></div>
 <script>
+  document.getElementById('filter').addEventListener('input', (e) => {
+    const kw = e.target.value.trim().toLowerCase();
+    document.querySelectorAll('#images .img').forEach((el) => {
+      el.style.display = !kw || el.dataset.search.includes(kw) ? '' : 'none';
+    });
+  });
   const urlInput = document.getElementById('url');
   const jsonEl = document.getElementById('json');
   const statusEl = document.getElementById('status');
@@ -176,12 +196,12 @@ def save_meta(meta):
         raise
 
 
-def _registry(method, url, data=None, headers=None):
+def _registry(method, url, data=None, headers=None, timeout=600):
     """返回 (status, headers, body)；HTTP 错误码不抛异常，连接失败抛 REGISTRY_UNAVAILABLE。"""
     req = urllib.request.Request(url, data=data, method=method,
                                  headers=headers or {})
     try:
-        with urllib.request.urlopen(req, timeout=600) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, resp.headers, resp.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.headers, exc.read()
@@ -328,13 +348,15 @@ def set_image_info(arguments):
 
 
 def _catalog_repositories():
-    status, _, body = _registry("GET", f"{REGISTRY_API}/v2/_catalog")
+    status, _, body = _registry("GET", f"{REGISTRY_API}/v2/_catalog",
+                                timeout=10)
     if status != 200:
         raise ToolError("REGISTRY_UNAVAILABLE", f"列出镜像失败（{status}）")
     meta = load_meta()
     repositories = []
     for name in json.loads(body).get("repositories") or []:
-        status, _, body = _registry("GET", f"{_repo_url(name)}/tags/list")
+        status, _, body = _registry("GET", f"{_repo_url(name)}/tags/list",
+                                    timeout=10)
         if status != 200:
             raise ToolError("REGISTRY_UNAVAILABLE",
                             f"列出 {name} 的 tag 失败（{status}）")
@@ -363,6 +385,29 @@ def search_images(arguments):
         or keyword in repo["features"].lower()
     ]
     return {"repositories": matched}
+
+
+def render_images():
+    try:
+        repositories = _catalog_repositories()
+    except ToolError as exc:
+        return f'<p class="error">仓库不可访问：{html.escape(str(exc))}</p>'
+    if not repositories:
+        return '<p class="muted">暂无镜像</p>'
+    items = []
+    for repo in repositories:
+        search = " ".join(
+            (repo["name"], repo["summary"], repo["features"])).lower()
+        summary = (html.escape(repo["summary"]) if repo["summary"]
+                   else '<span class="muted">未登记</span>')
+        items.append(
+            f'<div class="img" data-search="{html.escape(search)}">'
+            f'<span class="name">{html.escape(repo["name"])}</span>'
+            f'<span class="tags">{html.escape(", ".join(repo["tags"]))}</span>'
+            f'<div class="summary">{summary}</div>'
+            f'<div class="features">{html.escape(repo["features"])}</div>'
+            '</div>')
+    return "".join(items)
 
 
 TOOL_IMPL = {
@@ -451,7 +496,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.split("?", 1)[0] in ("/", ""):
-            self._send(200, CONFIG_PAGE, "text/html; charset=utf-8")
+            page = CONFIG_PAGE.replace("<!--IMAGES-->", render_images())
+            self._send(200, page, "text/html; charset=utf-8")
         else:
             self._send(404, json.dumps({"error": "not found"}))
 
