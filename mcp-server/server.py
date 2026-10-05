@@ -495,9 +495,16 @@ class Handler(BaseHTTPRequestHandler):
         return f"{proto}://{host}"
 
     def do_GET(self):
-        if self.path.split("?", 1)[0] in ("/", ""):
+        path = self.path.split("?", 1)[0]
+        if path in ("/", ""):
             page = CONFIG_PAGE.replace("<!--IMAGES-->", render_images())
             self._send(200, page, "text/html; charset=utf-8")
+        elif path == "/mcp":
+            # streamable-http 客户端把 404 视为会话失效并反复重连，不提供 SSE 流须回 405
+            self.send_response(405)
+            self.send_header("Allow", "POST")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
         else:
             self._send(404, json.dumps({"error": "not found"}))
 

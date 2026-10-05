@@ -126,6 +126,16 @@ expect("<html" in page and "mcpServers" in page, "配置页内容不正确")
 expect('id="filter"' in page, "页面缺少筛选框")
 print("PASS: GET / 返回配置页与筛选框")
 
+# GET /mcp 不提供 SSE 流
+try:
+    urllib.request.urlopen(urllib.request.Request(
+        URL, headers={"Accept": "text/event-stream"}))
+    raise AssertionError("GET /mcp 应返回 405")
+except urllib.error.HTTPError as exc:
+    expect(exc.code == 405 and exc.headers.get("Allow") == "POST",
+           f"GET /mcp 应返回 405 Allow: POST：{exc.code} {exc.headers.get('Allow')}")
+print("PASS: GET /mcp 返回 405 Allow: POST")
+
 # initialize
 r = rpc("initialize", {})
 expect(r["result"]["protocolVersion"] == "2025-06-18", "initialize 失败")
