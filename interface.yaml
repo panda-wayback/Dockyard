@@ -6,11 +6,14 @@ input:
   command: docker compose up -d   # 在项目根目录执行；停止用 docker compose down
   env:                            # 均可选，可写在根目录 .env 或命令行环境变量中
     REGISTRY_PORT:
-      default: 5050
+      default: 4070
       description: 仓库 API 在宿主机上的端口，docker push/pull 使用
     UI_PORT:
-      default: 8090
+      default: 4090
       description: Web UI 在宿主机上的端口
+    MCP_PORT:
+      default: 4080
+      description: MCP 服务在宿主机上的端口（配置页与 /mcp 端点）
     REGISTRY_DATA_DIR:
       default: ./data/registry
       description: 仓库数据在宿主机上的目录
@@ -35,7 +38,9 @@ errors:
   PORT_IN_USE: REGISTRY_PORT 或 UI_PORT 已被占用时 compose 启动失败；改用其它端口重试。
 
 depends: []
-modules: []
+modules:
+  - path: mcp-server
+    function: 提供 MCP 配置页与 streamable-http MCP 端点，通过宿主机 Docker 把项目镜像构建并推送到私有仓库。
 
 tests:
   integration: tests/integration.sh   # 用临时端口、临时数据目录和独立 compose 项目名运行，不影响正在使用的实例

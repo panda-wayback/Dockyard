@@ -3,7 +3,7 @@ services:
     image: registry:2
     restart: always
     ports:
-      - "${REGISTRY_PORT:-5050}:5000"
+      - "${REGISTRY_PORT:-4070}:5000"
     environment:
       REGISTRY_STORAGE_DELETE_ENABLED: "true"
     volumes:
@@ -13,7 +13,7 @@ services:
     image: joxit/docker-registry-ui:2
     restart: always
     ports:
-      - "${UI_PORT:-8090}:80"
+      - "${UI_PORT:-4090}:80"
     environment:
       SINGLE_REGISTRY: "true"
       REGISTRY_TITLE: MCPDock
@@ -21,5 +21,22 @@ services:
       NGINX_RESOLVER: 127.0.0.11
       DELETE_IMAGES: "true"
       SHOW_CONTENT_DIGEST: "true"
+    depends_on:
+      - registry
+
+  mcp:
+    build: ./mcp-server
+    restart: always
+    ports:
+      - "${MCP_PORT:-4080}:8080"
+    environment:
+      REGISTRY_ADDRESS: localhost:${REGISTRY_PORT:-4070}
+      REGISTRY_API: http://host.docker.internal:${REGISTRY_PORT:-4070}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # macOS Docker Desktop 默认共享 /Users；挂到同一路径使容器内外项目路径一致
+      - ${HOME}:${HOME}
     depends_on:
       - registry

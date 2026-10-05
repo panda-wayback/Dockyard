@@ -3,13 +3,15 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export COMPOSE_PROJECT_NAME="mcpdock-it"
-export REGISTRY_PORT="${IT_REGISTRY_PORT:-15050}"
-export UI_PORT="${IT_UI_PORT:-18090}"
+export REGISTRY_PORT="${IT_REGISTRY_PORT:-14070}"
+export UI_PORT="${IT_UI_PORT:-14090}"
+export MCP_PORT="${IT_MCP_PORT:-14080}"
 export REGISTRY_DATA_DIR="$(mktemp -d)"
 WORK_DIR="$(mktemp -d)"
 
 REGISTRY="localhost:${REGISTRY_PORT}"
 UI="http://localhost:${UI_PORT}"
+MCP="http://localhost:${MCP_PORT}"
 REPO="mcpdock-it/hello"
 TAG="it-tag"
 IMAGE="${REGISTRY}/${REPO}:${TAG}"
@@ -41,6 +43,7 @@ start() {
   compose up -d >/dev/null
   wait_ok "http://${REGISTRY}/v2/"
   wait_ok "${UI}/v2/"
+  wait_ok "${MCP}/"
 }
 
 tags() { curl -s "${UI}/v2/${REPO}/tags/list"; }
@@ -52,6 +55,17 @@ pass "compose 启动，仓库 API 与 UI 反代均可访问"
 # UI 页面
 curl -s "${UI}/" | grep -qi "<html" || fail "UI 根路径未返回 Web 页面"
 pass "UI 根路径返回 Web 页面"
+
+# MCP 配置页与 /mcp 端点
+curl -s "${MCP}/" | grep -q "mcpServers" || fail "MCP 配置页缺少 mcpServers"
+INIT="$(curl -s -X POST "${MCP}/mcp" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}')"
+echo "$INIT" | grep -q '"protocolVersion"' || fail "MCP initialize 失败：$INIT"
+TLIST="$(curl -s -X POST "${MCP}/mcp" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')"
+echo "$TLIST" | grep -q "build_and_push" || fail "MCP tools/list 缺少 build_and_push"
+echo "$TLIST" | grep -q "list_images" || fail "MCP tools/list 缺少 list_images"
+pass "MCP 配置页与 /mcp 端点（initialize、tools/list）"
 
 # push
 printf '%s' "$CONTENT" > "$WORK_DIR/content.txt"
