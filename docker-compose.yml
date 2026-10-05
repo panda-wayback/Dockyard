@@ -30,16 +30,10 @@ services:
     ports:
       - "${MCP_PORT:-20080}:8080"
     environment:
-      REGISTRY_ADDRESS: localhost:${REGISTRY_PORT:-20070}
-      REGISTRY_API: http://host.docker.internal:${REGISTRY_PORT:-20070}
+      REGISTRY_API: http://registry:5000
       META_DIR: /data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - mcp-data:/data
-      - /var/run/docker.sock:/var/run/docker.sock
-      # macOS Docker Desktop 默认共享 /Users；挂到同一路径使容器内外项目路径一致
-      - ${HOME}:${HOME}
     depends_on:
       - registry
 

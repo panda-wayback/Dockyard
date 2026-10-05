@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""MCPDock MCP 服务器：配置页 + streamable-http MCP 端点。
+"""MCPDock MCP 服务器：配置页 + streamable-http MCP 端点 + 镜像上传端点。
 
-仅依赖 Python 标准库；构建/推送通过容器内的 docker CLI
-（镜像中 apk 安装）经 /var/run/docker.sock 交给宿主机 daemon 执行。
+仅依赖 Python 标准库；上传的镜像经仓库 HTTP API 推入，不使用 Docker。
 """
+import hashlib
 import json
 import os
 import re
-import subprocess
+import shutil
+import tarfile
 import tempfile
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-REGISTRY_ADDRESS = os.environ.get("REGISTRY_ADDRESS", "localhost:20070")
 REGISTRY_API = os.environ.get("REGISTRY_API", "http://localhost:20070").rstrip("/")
 META_DIR = os.environ.get("META_DIR", "/data")
 META_FILE = os.path.join(META_DIR, "images.json")
@@ -22,36 +23,16 @@ PORT = int(os.environ.get("PORT", "8080"))
 
 _meta_lock = threading.Lock()
 
-
-def load_meta():
-    try:
-        with open(META_FILE, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (FileNotFoundError, ValueError, OSError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def save_meta(meta):
-    os.makedirs(META_DIR, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=META_DIR)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(meta, fh, ensure_ascii=False)
-        os.replace(tmp, META_FILE)
-    except OSError:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
 # 镜像名：小写字母数字段，段内允许 . _ -，段间用 /
 NAME_RE = re.compile(
     r"^[a-z0-9]+(?:[._-][a-z0-9]+)*"
     r"(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$"
 )
 TAG_RE = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$")
+
+OCI_MANIFEST = "application/vnd.oci.image.manifest.v1+json"
+OCI_CONFIG = "application/vnd.oci.image.config.v1+json"
+OCI_LAYER = "application/vnd.oci.image.layer.v1.tar"
 
 CONFIG_PAGE = """<!doctype html>
 <html lang="zh-CN">
@@ -83,7 +64,7 @@ CONFIG_PAGE = """<!doctype html>
 <button id="copy">复制 JSON</button><span id="status"></span>
 <p class="hint">
   把 JSON 添加到 Cursor 的 MCP 配置（设置 → MCP，或编辑
-  <code>~/.cursor/mcp.json</code>）。保存后 AI 即可调用工具把项目镜像构建并推送到本仓库。
+  <code>~/.cursor/mcp.json</code>）。保存后 AI 即可把项目镜像上传到本仓库并登记简介。
 </p>
 <script>
   const urlInput = document.getElementById('url');
@@ -107,59 +88,62 @@ CONFIG_PAGE = """<!doctype html>
 </html>
 """
 
-TOOLS = [
-    {
-        "name": "build_and_push",
-        "description": (
-            "构建一个 Docker 项目并推送到 MCPDock 私有仓库。"
-            "project_dir 是宿主机上含 Dockerfile 的项目目录绝对路径，"
-            "image 是仓库内镜像名（可含 / 路径），tag 是标签。"
-            "调用前必须先阅读 project_dir 下的 README、文档与代码，"
-            "自行提炼 summary（镜像一句话简介）与 features（功能说明），"
-            "不要向用户询问这两项。"
-            "成功后返回推送引用 reference 与 digest。"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "project_dir": {"type": "string",
-                                "description": "宿主机上项目目录的绝对路径"},
-                "image": {"type": "string", "description": "仓库内镜像名"},
-                "tag": {"type": "string", "description": "镜像标签"},
-                "summary": {"type": "string",
-                            "description": "镜像一句话简介，阅读项目后自行提炼"},
-                "features": {"type": "string",
-                             "description": "镜像功能说明，阅读项目后自行提炼"},
+
+def tools_for(base_url):
+    upload = f"{base_url}/upload?image=<image>&tag=<tag>"
+    return [
+        {
+            "name": "set_image_info",
+            "description": (
+                "登记 MCPDock 私有仓库中镜像的简介与功能说明。"
+                "把项目镜像上传到仓库的完整流程（在用户本机执行命令）：\n"
+                "1. docker build -t <image>:<tag> <项目目录>\n"
+                "2. docker save -o <临时文件>.tar <image>:<tag>\n"
+                f"3. curl --fail-with-body -T <临时文件>.tar '{upload}'\n"
+                "4. 阅读项目的 README、文档与代码，自行提炼 summary（一句话简介）"
+                "与 features（功能说明），调用本工具登记，不要向用户询问这两项；"
+                "完成后删除临时文件。\n"
+                "image 为仓库内镜像名（小写，可含 / 路径），tag 为标签。"
+                "登记按镜像名保存，与 tag 无关，再次登记覆盖旧值。"
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "image": {"type": "string", "description": "仓库内镜像名"},
+                    "summary": {"type": "string",
+                                "description": "镜像一句话简介，阅读项目后自行提炼"},
+                    "features": {"type": "string",
+                                 "description": "镜像功能说明，阅读项目后自行提炼"},
+                },
+                "required": ["image", "summary", "features"],
+                "additionalProperties": False,
             },
-            "required": ["project_dir", "image", "tag", "summary", "features"],
-            "additionalProperties": False,
         },
-    },
-    {
-        "name": "list_images",
-        "description": "列出私有仓库中的全部镜像及其 tag、简介与功能说明。",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "search_images",
-        "description": (
-            "按关键字查找私有仓库中的镜像，"
-            "在镜像名、简介 summary 与功能说明 features 中做大小写不敏感匹配。"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "keyword": {"type": "string", "description": "查找关键字"},
+        {
+            "name": "list_images",
+            "description": "列出私有仓库中的全部镜像及其 tag、简介与功能说明。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
             },
-            "required": ["keyword"],
-            "additionalProperties": False,
         },
-    },
-]
+        {
+            "name": "search_images",
+            "description": (
+                "按关键字查找私有仓库中的镜像，"
+                "在镜像名、简介 summary 与功能说明 features 中做大小写不敏感匹配。"
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string", "description": "查找关键字"},
+                },
+                "required": ["keyword"],
+                "additionalProperties": False,
+            },
+        },
+    ]
 
 
 class ToolError(Exception):
@@ -168,42 +152,170 @@ class ToolError(Exception):
         self.code = code
 
 
-def _run(cmd):
-    return subprocess.run(cmd, capture_output=True, text=True)
+def load_meta():
+    try:
+        with open(META_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (FileNotFoundError, ValueError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
-def build_and_push(arguments):
-    project_dir = arguments["project_dir"].strip()
+def save_meta(meta):
+    os.makedirs(META_DIR, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=META_DIR)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(meta, fh, ensure_ascii=False)
+        os.replace(tmp, META_FILE)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _registry(method, url, data=None, headers=None):
+    """返回 (status, headers, body)；HTTP 错误码不抛异常，连接失败抛 REGISTRY_UNAVAILABLE。"""
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            return resp.status, resp.headers, resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers, exc.read()
+    except (urllib.error.URLError, OSError) as exc:
+        raise ToolError("REGISTRY_UNAVAILABLE", str(exc))
+
+
+def _repo_url(image):
+    return f"{REGISTRY_API}/v2/{urllib.parse.quote(image, safe='/')}"
+
+
+# ---------- 上传 ----------
+
+def _digest_of(fileobj):
+    h = hashlib.sha256()
+    size = 0
+    first = b""
+    while True:
+        chunk = fileobj.read(1024 * 1024)
+        if not chunk:
+            break
+        if not first:
+            first = chunk[:4]
+        h.update(chunk)
+        size += len(chunk)
+    return "sha256:" + h.hexdigest(), size, first
+
+
+def _layer_media_type(head):
+    if head[:2] == b"\x1f\x8b":
+        return OCI_LAYER + "+gzip"
+    if head[:4] == b"\x28\xb5\x2f\xfd":
+        return OCI_LAYER + "+zstd"
+    return OCI_LAYER
+
+
+def _push_blob(image, digest, size, open_body):
+    status, _, _ = _registry("HEAD", f"{_repo_url(image)}/blobs/{digest}")
+    if status == 200:
+        return
+    status, headers, body = _registry(
+        "POST", f"{_repo_url(image)}/blobs/uploads/", data=b"")
+    if status != 202 or not headers.get("Location"):
+        raise ToolError("PUSH_FAILED",
+                        f"开始上传 blob 失败（{status}）：{body[:500]!r}")
+    location = urllib.parse.urljoin(REGISTRY_API + "/", headers["Location"])
+    sep = "&" if "?" in location else "?"
+    with open_body() as fh:
+        status, _, body = _registry(
+            "PUT", f"{location}{sep}digest={digest}", data=fh,
+            headers={"Content-Type": "application/octet-stream",
+                     "Content-Length": str(size)})
+    if status != 201:
+        raise ToolError("PUSH_FAILED",
+                        f"上传 blob {digest} 失败（{status}）：{body[:500]!r}")
+
+
+def push_archive(archive_path, image, tag):
+    try:
+        tar = tarfile.open(archive_path, "r:*")
+    except (tarfile.TarError, OSError) as exc:
+        raise ToolError("INVALID_IMAGE_ARCHIVE", f"无法解析 tar：{exc}")
+    with tar:
+        def member(path):
+            try:
+                fh = tar.extractfile(path)
+            except KeyError:
+                fh = None
+            if fh is None:
+                raise ToolError("INVALID_IMAGE_ARCHIVE", f"缺少文件：{path}")
+            return fh
+
+        try:
+            entries = json.load(member("manifest.json"))
+            entry = entries[0]
+            config_path = entry["Config"]
+            layer_paths = entry["Layers"]
+        except ToolError:
+            raise
+        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            raise ToolError("INVALID_IMAGE_ARCHIVE",
+                            f"manifest.json 格式不正确：{exc}")
+
+        descriptors = []
+        for path, media_type in ([(config_path, OCI_CONFIG)]
+                                 + [(p, None) for p in layer_paths]):
+            with member(path) as fh:
+                digest, size, head = _digest_of(fh)
+            _push_blob(image, digest, size, lambda p=path: member(p))
+            descriptors.append({
+                "mediaType": media_type or _layer_media_type(head),
+                "digest": digest,
+                "size": size,
+            })
+
+    manifest = json.dumps({
+        "schemaVersion": 2,
+        "mediaType": OCI_MANIFEST,
+        "config": descriptors[0],
+        "layers": descriptors[1:],
+    }).encode()
+    status, headers, body = _registry(
+        "PUT", f"{_repo_url(image)}/manifests/{tag}", data=manifest,
+        headers={"Content-Type": OCI_MANIFEST})
+    if status != 201:
+        raise ToolError("PUSH_FAILED",
+                        f"写入 manifest 失败（{status}）：{body[:500]!r}")
+    digest = headers.get("Docker-Content-Digest") or (
+        "sha256:" + hashlib.sha256(manifest).hexdigest())
+    return {"image": image, "tag": tag, "digest": digest}
+
+
+# ---------- 工具 ----------
+
+def set_image_info(arguments):
     image = arguments["image"].strip()
-    tag = arguments["tag"].strip()
     summary = arguments["summary"].strip()
     features = arguments["features"].strip()
-
     if not NAME_RE.match(image):
         raise ValueError("image 不是合法的镜像名")
-    if not TAG_RE.match(tag):
-        raise ValueError("tag 不是合法的标签")
     if not summary:
         raise ValueError("summary 不能为空")
     if not features:
         raise ValueError("features 不能为空")
-    if not os.path.isdir(project_dir):
-        raise ToolError("PROJECT_NOT_FOUND", f"目录不存在：{project_dir}")
-    if not os.path.isfile(os.path.join(project_dir, "Dockerfile")):
-        raise ToolError("PROJECT_NOT_FOUND",
-                        f"目录下没有 Dockerfile：{project_dir}")
 
-    reference = f"{REGISTRY_ADDRESS}/{image}:{tag}"
-
-    build = _run(["docker", "build", "-t", reference, project_dir])
-    if build.returncode != 0:
-        raise ToolError("BUILD_FAILED",
-                        (build.stdout + build.stderr).strip()[-2000:])
-
-    push = _run(["docker", "push", reference])
-    if push.returncode != 0:
-        raise ToolError("PUSH_FAILED",
-                        (push.stdout + push.stderr).strip()[-2000:])
+    status, _, body = _registry("GET", f"{_repo_url(image)}/tags/list")
+    tags = []
+    if status == 200:
+        try:
+            tags = json.loads(body).get("tags") or []
+        except ValueError:
+            tags = []
+    if not tags:
+        raise ToolError("IMAGE_NOT_FOUND", f"仓库中没有镜像：{image}")
 
     try:
         with _meta_lock:
@@ -212,35 +324,24 @@ def build_and_push(arguments):
             save_meta(meta)
     except OSError as exc:
         raise ToolError("META_WRITE_FAILED", str(exc))
-
-    match = re.search(r"digest:\s*(sha256:[0-9a-f]+)", push.stdout)
-    return {"reference": reference,
-            "digest": match.group(1) if match else ""}
+    return {"image": image, "summary": summary, "features": features}
 
 
 def _catalog_repositories():
-    try:
-        with urllib.request.urlopen(f"{REGISTRY_API}/v2/_catalog",
-                                    timeout=10) as resp:
-            catalog = json.load(resp)
-    except (urllib.error.URLError, OSError) as exc:
-        raise ToolError("REGISTRY_UNAVAILABLE", str(exc))
-
+    status, _, body = _registry("GET", f"{REGISTRY_API}/v2/_catalog")
+    if status != 200:
+        raise ToolError("REGISTRY_UNAVAILABLE", f"列出镜像失败（{status}）")
     meta = load_meta()
     repositories = []
-    for name in catalog.get("repositories", []):
-        quoted = urllib.request.quote(name, safe="/")
-        try:
-            with urllib.request.urlopen(
-                    f"{REGISTRY_API}/v2/{quoted}/tags/list",
-                    timeout=10) as resp:
-                tags_data = json.load(resp)
-        except (urllib.error.URLError, OSError) as exc:
-            raise ToolError("REGISTRY_UNAVAILABLE", str(exc))
+    for name in json.loads(body).get("repositories") or []:
+        status, _, body = _registry("GET", f"{_repo_url(name)}/tags/list")
+        if status != 200:
+            raise ToolError("REGISTRY_UNAVAILABLE",
+                            f"列出 {name} 的 tag 失败（{status}）")
         info = meta.get(name, {})
         repositories.append({
             "name": name,
-            "tags": tags_data.get("tags") or [],
+            "tags": json.loads(body).get("tags") or [],
             "summary": info.get("summary", ""),
             "features": info.get("features", ""),
         })
@@ -265,7 +366,7 @@ def search_images(arguments):
 
 
 TOOL_IMPL = {
-    "build_and_push": build_and_push,
+    "set_image_info": set_image_info,
     "list_images": list_images,
     "search_images": search_images,
 }
@@ -278,7 +379,7 @@ def rpc_result(payload):
             "structuredContent": payload}
 
 
-def handle_rpc(message):
+def handle_rpc(message, base_url):
     """返回 (http_status, response_dict_or_None)；None 表示通知，无响应体。"""
     if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
         return 200, {"jsonrpc": "2.0", "id": None,
@@ -300,11 +401,11 @@ def handle_rpc(message):
     if method == "initialize":
         return ok({"protocolVersion": "2025-06-18",
                    "capabilities": {"tools": {}},
-                   "serverInfo": {"name": "mcpdock", "version": "0.1.0"}})
+                   "serverInfo": {"name": "mcpdock", "version": "0.2.0"}})
     if method == "ping":
         return ok({})
     if method == "tools/list":
-        return ok({"tools": TOOLS})
+        return ok({"tools": tools_for(base_url)})
     if method == "tools/call":
         if not isinstance(params, dict) or not isinstance(
                 params.get("name"), str):
@@ -320,7 +421,7 @@ def handle_rpc(message):
             payload = impl(arguments)
         except KeyError as exc:
             return err(-32602, f"缺少参数：{exc.args[0]}")
-        except ValueError as exc:
+        except (ValueError, AttributeError) as exc:
             return err(-32602, str(exc))
         except ToolError as exc:
             return ok({"isError": True,
@@ -340,6 +441,14 @@ class Handler(BaseHTTPRequestHandler):
         if data:
             self.wfile.write(data)
 
+    def _send_json(self, status, payload):
+        self._send(status, json.dumps(payload, ensure_ascii=False))
+
+    def _base_url(self):
+        proto = self.headers.get("X-Forwarded-Proto", "http")
+        host = self.headers.get("Host", f"localhost:{PORT}")
+        return f"{proto}://{host}"
+
     def do_GET(self):
         if self.path.split("?", 1)[0] in ("/", ""):
             self._send(200, CONFIG_PAGE, "text/html; charset=utf-8")
@@ -358,11 +467,54 @@ class Handler(BaseHTTPRequestHandler):
                 {"jsonrpc": "2.0", "id": None,
                  "error": {"code": -32700, "message": "解析失败"}}))
             return
-        status, response = handle_rpc(message)
+        status, response = handle_rpc(message, self._base_url())
         if response is None:
             self._send(202)
         else:
             self._send(status, json.dumps(response, ensure_ascii=False))
+
+    def do_PUT(self):
+        path, _, query = self.path.partition("?")
+        if path != "/upload":
+            self._send(404, json.dumps({"error": "not found"}))
+            return
+        params = urllib.parse.parse_qs(query)
+        image = (params.get("image") or [""])[0].strip()
+        tag = (params.get("tag") or [""])[0].strip()
+        length = self.headers.get("Content-Length")
+
+        def fail(status, code, message):
+            self.close_connection = True
+            self._send_json(status, {"error": code, "message": message})
+
+        if not NAME_RE.match(image):
+            return fail(400, "INVALID_ARGUMENT", "image 不是合法的镜像名")
+        if not TAG_RE.match(tag):
+            return fail(400, "INVALID_ARGUMENT", "tag 不是合法的标签")
+        if length is None or not length.isdigit():
+            return fail(400, "INVALID_ARGUMENT", "缺少 Content-Length")
+
+        work = tempfile.mkdtemp()
+        try:
+            archive = os.path.join(work, "image.tar")
+            remaining = int(length)
+            with open(archive, "wb") as fh:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(remaining, 1024 * 1024))
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    remaining -= len(chunk)
+            if remaining > 0:
+                return fail(400, "INVALID_ARGUMENT", "请求体不完整")
+            try:
+                result = push_archive(archive, image, tag)
+            except ToolError as exc:
+                status = 400 if exc.code == "INVALID_IMAGE_ARCHIVE" else 502
+                return fail(status, exc.code, str(exc))
+            self._send_json(200, result)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
     def log_message(self, fmt, *args):  # 保持容器日志简洁
         pass

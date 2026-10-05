@@ -84,7 +84,8 @@ INIT="$(curl -s -X POST "${MCP}/mcp" -H 'Content-Type: application/json' \
 echo "$INIT" | grep -q '"protocolVersion"' || fail "MCP initialize 失败：$INIT"
 TLIST="$(curl -s -X POST "${MCP}/mcp" -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')"
-echo "$TLIST" | grep -q "build_and_push" || fail "MCP tools/list 缺少 build_and_push"
+echo "$TLIST" | grep -q "set_image_info" || fail "MCP tools/list 缺少 set_image_info"
+echo "$TLIST" | grep -q "${MCP}/upload" || fail "MCP 工具说明缺少上传地址 ${MCP}/upload"
 echo "$TLIST" | grep -q "list_images" || fail "MCP tools/list 缺少 list_images"
 echo "$TLIST" | grep -q "search_images" || fail "MCP tools/list 缺少 search_images"
 pass "MCP 配置页与 /mcp 端点（initialize、tools/list）"
@@ -110,25 +111,36 @@ docker rm "$CID" >/dev/null
 [ "$(cat "$WORK_DIR/pulled.txt")" = "$CONTENT" ] || fail "pull 回来的内容与 push 的不一致"
 pass "docker pull 内容一致"
 
-# 通过 MCP build_and_push 带简介推送（项目放在 HOME 下，mcp 容器已挂载 HOME）
-MCP_PROJ="${HOME}/.mcpdock-it-$$"
+# 客户端流程：本机构建（多层基础镜像）→ docker save → 上传到 MCP → 登记简介
+MCP_PROJ="$WORK_DIR/mcp-proj"
+MCP_LOCAL="mcpdock-it-local-$$:${TAG}"
 mkdir -p "$MCP_PROJ"
 printf '# Hello MCP\n\n一个演示问候服务。\n' > "$MCP_PROJ/README.md"
-printf 'FROM scratch\nCOPY README.md /README.md\n' > "$MCP_PROJ/Dockerfile"
+printf 'FROM registry:2\nCOPY README.md /README.md\n' > "$MCP_PROJ/Dockerfile"
+docker build -q -t "$MCP_LOCAL" "$MCP_PROJ" >/dev/null
+docker save -o "$WORK_DIR/mcp.tar" "$MCP_LOCAL"
+docker rmi -f "$MCP_LOCAL" >/dev/null
+RESP="$(curl -s --fail-with-body -T "$WORK_DIR/mcp.tar" \
+  "${MCP}/upload?image=${MCP_REPO}&tag=${TAG}")" || fail "上传失败：$RESP"
+echo "$RESP" | grep -q "sha256:" || fail "上传未返回 digest：$RESP"
+docker pull -q "$MCP_IMAGE" >/dev/null || fail "上传的镜像无法 pull"
+CID="$(docker create "$MCP_IMAGE")"
+docker cp "$CID:/README.md" "$WORK_DIR/mcp-readme.md" >/dev/null
+docker rm "$CID" >/dev/null
+cmp -s "$WORK_DIR/mcp-readme.md" "$MCP_PROJ/README.md" || fail "上传镜像内容不一致"
+pass "镜像经 MCP 上传端点推入仓库，可 pull 且内容一致"
+
 MCP_SUMMARY="演示用问候镜像"
 MCP_FEATURES="内置 README，提供问候与演示功能。"
-ARGS="$(python3 - "$MCP_PROJ" "$MCP_REPO" "$TAG" "$MCP_SUMMARY" "$MCP_FEATURES" <<'PY'
+ARGS="$(python3 - "$MCP_REPO" "$MCP_SUMMARY" "$MCP_FEATURES" <<'PY'
 import json, sys
-print(json.dumps({"project_dir": sys.argv[1], "image": sys.argv[2],
-                  "tag": sys.argv[3], "summary": sys.argv[4],
-                  "features": sys.argv[5]}))
+print(json.dumps({"image": sys.argv[1], "summary": sys.argv[2],
+                  "features": sys.argv[3]}))
 PY
 )"
-RESP="$(mcp_call build_and_push "$ARGS")"
-echo "$RESP" | grep -q "\"reference\": \"${MCP_IMAGE}\"" \
-  || fail "MCP build_and_push 未返回正确 reference：$RESP"
-echo "$RESP" | grep -q "sha256:" || fail "MCP build_and_push 未返回 digest：$RESP"
-pass "MCP build_and_push 带简介推送成功"
+RESP="$(mcp_call set_image_info "$ARGS")"
+echo "$RESP" | grep -q "$MCP_SUMMARY" || fail "MCP set_image_info 失败：$RESP"
+pass "MCP set_image_info 登记简介"
 
 # MCP 列表带简介
 RESP="$(mcp_call list_images '{}')"
@@ -148,8 +160,6 @@ tags | grep -q "\"${TAG}\"" || fail "down 后重新 up，tag 丢失"
 RESP="$(mcp_call search_images '{"keyword": "问候"}')"
 echo "$RESP" | grep -q "$MCP_SUMMARY" || fail "重启后简介丢失：$RESP"
 pass "数据与镜像简介持久化"
-
-rm -rf "$MCP_PROJ"
 
 # 通过 UI 删除 tag
 DIGEST="$(curl -s -I -H "Accept: ${ACCEPT}" "${UI}/v2/${REPO}/manifests/${TAG}" \

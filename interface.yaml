@@ -33,7 +33,7 @@ contract:
   - UI 可列出仓库中的镜像与 tag，并可删除 tag（通过 UI 的 /v2/ 以 manifest digest 删除）。
   - 仓库数据保存在 ${REGISTRY_DATA_DIR}；docker compose down 后重新 up，已 push 的镜像仍在。
   - 删除 tag 只删除引用；释放磁盘需执行 docker compose exec registry registry garbage-collect /etc/docker/registry/config.yml。
-  - 通过 MCP build_and_push 推送的镜像带简介与功能说明，MCP 可列出并按关键字查找；compose 重启后简介仍在。
+  - 客户端把 docker save 导出的镜像 PUT 到 http://<MCP 地址>/upload?image=<name>&tag=<tag> 即推入本仓库，客户端无需 HTTPS 或 insecure-registries 配置；经 MCP set_image_info 登记的简介可通过 list_images / search_images 查看与查找，compose 重启后仍在。
 
 errors:
   PORT_IN_USE: REGISTRY_PORT 或 UI_PORT 已被占用时 compose 启动失败；改用其它端口重试。
@@ -41,7 +41,7 @@ errors:
 depends: []
 modules:
   - path: mcp-server
-    function: 提供 MCP 配置页与 streamable-http MCP 端点，通过宿主机 Docker 把项目镜像（含简介）构建推送到私有仓库，并可列出、搜索仓库镜像。
+    function: 提供 MCP 配置页、streamable-http MCP 端点与镜像上传端点，把客户端上传的镜像推入私有仓库，登记镜像简介，并可列出、搜索仓库镜像。
 
 tests:
   integration: tests/integration.sh   # 用临时端口、临时数据目录和独立 compose 项目名运行，不影响正在使用的实例

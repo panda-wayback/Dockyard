@@ -1,13 +1,10 @@
 name: mcp-server
-function: 提供 MCP 配置页与 streamable-http MCP 端点，通过宿主机 Docker 把项目镜像（含简介）构建推送到私有仓库，并可列出、搜索仓库镜像。
+function: 提供 MCP 配置页、streamable-http MCP 端点与镜像上传端点，把客户端上传的镜像推入私有仓库，登记镜像简介，并可列出、搜索仓库镜像。
 
 input:
-  - name: env REGISTRY_ADDRESS
-    type: string，形如 host:port
-    desc: 推送目标仓库地址，用于给镜像打 tag（docker 由宿主机 daemon 执行，故为主机视角地址）；默认 localhost:20070
   - name: env REGISTRY_API
     type: string，形如 http://host:port
-    desc: 本进程访问仓库 HTTP API 的地址（容器内为 host.docker.internal 视角）；默认 http://localhost:20070
+    desc: 本进程访问仓库 HTTP API 的地址；默认 http://localhost:20070
   - name: env META_DIR
     type: string，目录路径
     desc: 镜像简介元数据的存储目录，需挂载持久化卷；默认 /data
@@ -17,11 +14,16 @@ input:
   - name: HTTP POST /mcp
     type: MCP JSON-RPC（streamable-http，无状态）
     desc: MCP 端点，支持 initialize、tools/list、tools/call、ping
-  - name: tool build_and_push
-    type: '{project_dir, image, tag, summary, features: string}'
+  - name: HTTP PUT /upload?image=<image>&tag=<tag>
+    type: 请求体为 docker save 导出的镜像 tar（可 gzip），须带 Content-Length
     desc: |
-      project_dir 为宿主机上含 Dockerfile 的项目目录绝对路径；image 为仓库内镜像名（可含 / 路径）；tag 为标签。
-      summary 为镜像一句话简介，features 为功能说明。调用前须先阅读项目 README、文档与代码自行提炼 summary 与 features，不向用户询问。
+      把请求体中的镜像推入仓库，成为 <image>:<tag>；image 为仓库内镜像名（可含 / 路径），tag 为标签。
+      tar 中含多个镜像时取第一个。客户端用法：curl --fail-with-body -T <文件>.tar '<MCP 服务网址>/upload?image=<image>&tag=<tag>'
+  - name: tool set_image_info
+    type: '{image, summary, features: string}'
+    desc: |
+      登记仓库中已有镜像的一句话简介 summary 与功能说明 features。
+      工具说明给出上传流程（本机 docker build、docker save、curl 上传到本服务 /upload），上传地址取自客户端访问本服务所用的 Host（有 X-Forwarded-Proto 时采用其协议）；并要求 AI 上传后阅读项目 README、文档与代码自行提炼 summary 与 features，不向用户询问。
   - name: tool list_images
     type: '{}'
     desc: 列出仓库中的镜像、tag 与简介
@@ -33,12 +35,18 @@ output:
   - name: 配置页
     type: HTML
     desc: 可填写 MCP 服务网址（默认当前页面地址），实时生成 mcpServers JSON 并一键复制
-  - name: build_and_push 结果
-    type: '{reference: string, digest: string}'
-    desc: reference 为 <REGISTRY_ADDRESS>/<image>:<tag>，digest 为推送返回的 sha256
+  - name: PUT /upload 成功
+    type: 'HTTP 200，JSON {image, tag, digest}'
+    desc: digest 为仓库中该 tag 的 manifest sha256
+  - name: PUT /upload 失败
+    type: 'HTTP 4xx/5xx，JSON {error: 错误码, message: string}'
+    desc: 参数或镜像文件错误为 400，仓库不可达或推送失败为 502
+  - name: set_image_info 结果
+    type: '{image, summary, features}'
+    desc: 登记后的镜像简介
   - name: list_images 结果
     type: '{repositories: [{name, tags, summary, features}]}'
-    desc: 仓库中全部镜像及其 tag；summary/features 为镜像简介与功能说明，未经 MCP 上传的镜像为空字符串
+    desc: 仓库中全部镜像及其 tag；summary/features 为镜像简介与功能说明，未登记的镜像为空字符串
   - name: search_images 结果
     type: '{repositories: [{name, tags, summary, features}]}'
     desc: 名称、简介或功能说明中包含关键字的镜像；无匹配时为空列表
@@ -49,22 +57,23 @@ output:
 contract:
   - GET / 返回 HTML 页面；页面按填写的网址生成 {"mcpServers":{"mcpdock":{"url":"<网址>/mcp"}}}，网址默认取当前页面访问地址，服务端不保存该配置。
   - POST /mcp 对每个 JSON-RPC 请求返回单个 application/json 响应；initialize 协商后可调用 tools/list 与 tools/call。
-  - tools/list 返回 build_and_push、list_images 与 search_images 三个工具。
-  - build_and_push 依次执行 docker build、docker tag 为 <REGISTRY_ADDRESS>/<image>:<tag>、docker push；成功后返回 reference 与 digest，并按镜像名保存 summary 与 features（覆盖该镜像旧值）。
-  - summary 或 features 缺失或为空白时返回参数错误。
+  - tools/list 返回 set_image_info、list_images 与 search_images 三个工具；set_image_info 的说明中包含 <协议>://<Host>/upload 上传地址。
+  - PUT /upload 成功后，docker pull <仓库地址>/<image>:<tag> 得到与上传镜像内容一致的镜像；同名 tag 已存在时被覆盖；不影响 MCP 服务器所在主机的 Docker 镜像。
+  - PUT /upload 的 image 或 tag 不合法、缺少 Content-Length 时返回 400 INVALID_ARGUMENT；请求体不是可识别的 docker save 镜像文件时返回 400 INVALID_IMAGE_ARCHIVE。
+  - set_image_info 按镜像名保存 summary 与 features（覆盖该镜像旧值），与 tag 无关；镜像在仓库中不存在或没有 tag 时返回 IMAGE_NOT_FOUND；summary 或 features 缺失或为空白时返回参数错误。
   - list_images 返回 REGISTRY_API 中全部 repositories 及各自 tags、summary、features；空仓库返回空列表。
   - search_images 对 list_images 同样的镜像集合做大小写不敏感的子串匹配，keyword 命中 name、summary 或 features 任一字段即返回；keyword 为空白时返回参数错误；无匹配返回空列表。
-  - project_dir 不存在、不是目录或目录下无 Dockerfile 时返回 PROJECT_NOT_FOUND。
-  - docker build 或 push 失败时分别返回 BUILD_FAILED / PUSH_FAILED，message 含命令输出。
-  - REGISTRY_API 不可达时 list_images 或 search_images 返回 REGISTRY_UNAVAILABLE；元数据无法写入时 build_and_push 返回 META_WRITE_FAILED。
+  - REGISTRY_API 不可达时上传、set_image_info、list_images、search_images 返回 REGISTRY_UNAVAILABLE；元数据无法写入时 set_image_info 返回 META_WRITE_FAILED。
 
 errors:
-  - code: PROJECT_NOT_FOUND
-    desc: project_dir 不存在、不是目录，或目录下没有 Dockerfile
-  - code: BUILD_FAILED
-    desc: docker build 执行失败
+  - code: INVALID_ARGUMENT
+    desc: 上传参数不合法或缺少 Content-Length
+  - code: INVALID_IMAGE_ARCHIVE
+    desc: 上传内容不是可识别的 docker save 镜像文件
   - code: PUSH_FAILED
-    desc: docker push 执行失败
+    desc: 仓库拒绝写入镜像数据
+  - code: IMAGE_NOT_FOUND
+    desc: 登记简介时镜像在仓库中不存在
   - code: REGISTRY_UNAVAILABLE
     desc: 无法访问仓库 HTTP API
   - code: META_WRITE_FAILED
