@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export COMPOSE_PROJECT_NAME="mcpdock-it"
-export REGISTRY_PORT="${IT_REGISTRY_PORT:-14070}"
-export UI_PORT="${IT_UI_PORT:-14090}"
-export MCP_PORT="${IT_MCP_PORT:-14080}"
+export REGISTRY_PORT="${IT_REGISTRY_PORT:-21070}"
+export UI_PORT="${IT_UI_PORT:-21090}"
+export MCP_PORT="${IT_MCP_PORT:-21080}"
 export REGISTRY_DATA_DIR="$(mktemp -d)"
 WORK_DIR="$(mktemp -d)"
 

@@ -6,13 +6,13 @@ input:
   command: docker compose up -d   # 在项目根目录执行；停止用 docker compose down
   env:                            # 均可选，可写在根目录 .env 或命令行环境变量中
     REGISTRY_PORT:
-      default: 4070
+      default: 20070
       description: 仓库 API 在宿主机上的端口，docker push/pull 使用
     UI_PORT:
-      default: 4090
+      default: 20090
       description: Web UI 在宿主机上的端口
     MCP_PORT:
-      default: 4080
+      default: 20080
       description: MCP 服务在宿主机上的端口（配置页与 /mcp 端点）
     REGISTRY_DATA_DIR:
       default: ./data/registry

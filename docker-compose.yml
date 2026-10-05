@@ -3,7 +3,7 @@ services:
     image: registry:2
     restart: always
     ports:
-      - "${REGISTRY_PORT:-4070}:5000"
+      - "${REGISTRY_PORT:-20070}:5000"
     environment:
       REGISTRY_STORAGE_DELETE_ENABLED: "true"
     volumes:
@@ -13,7 +13,7 @@ services:
     image: joxit/docker-registry-ui:2
     restart: always
     ports:
-      - "${UI_PORT:-4090}:80"
+      - "${UI_PORT:-20090}:80"
     environment:
       SINGLE_REGISTRY: "true"
       REGISTRY_TITLE: MCPDock
@@ -28,10 +28,10 @@ services:
     build: ./mcp-server
     restart: always
     ports:
-      - "${MCP_PORT:-4080}:8080"
+      - "${MCP_PORT:-20080}:8080"
     environment:
-      REGISTRY_ADDRESS: localhost:${REGISTRY_PORT:-4070}
-      REGISTRY_API: http://host.docker.internal:${REGISTRY_PORT:-4070}
+      REGISTRY_ADDRESS: localhost:${REGISTRY_PORT:-20070}
+      REGISTRY_API: http://host.docker.internal:${REGISTRY_PORT:-20070}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

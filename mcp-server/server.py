@@ -12,8 +12,8 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-REGISTRY_ADDRESS = os.environ.get("REGISTRY_ADDRESS", "localhost:4070")
-REGISTRY_API = os.environ.get("REGISTRY_API", "http://localhost:4070").rstrip("/")
+REGISTRY_ADDRESS = os.environ.get("REGISTRY_ADDRESS", "localhost:20070")
+REGISTRY_API = os.environ.get("REGISTRY_API", "http://localhost:20070").rstrip("/")
 PORT = int(os.environ.get("PORT", "8080"))
 
 # 镜像名：小写字母数字段，段内允许 . _ -，段间用 /

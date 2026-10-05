@@ -4,10 +4,10 @@ function: 提供 MCP 配置页与 streamable-http MCP 端点，通过宿主机 D
 input:
   - name: env REGISTRY_ADDRESS
     type: string，形如 host:port
-    desc: 推送目标仓库地址，用于给镜像打 tag（docker 由宿主机 daemon 执行，故为主机视角地址）；默认 localhost:4070
+    desc: 推送目标仓库地址，用于给镜像打 tag（docker 由宿主机 daemon 执行，故为主机视角地址）；默认 localhost:20070
   - name: env REGISTRY_API
     type: string，形如 http://host:port
-    desc: 本进程访问仓库 HTTP API 的地址（容器内为 host.docker.internal 视角）；默认 http://localhost:4070
+    desc: 本进程访问仓库 HTTP API 的地址（容器内为 host.docker.internal 视角）；默认 http://localhost:20070
   - name: HTTP GET /
     type: 无
     desc: 返回 MCP 配置页（HTML）
