@@ -1,0 +1,25 @@
+services:
+  registry:
+    image: registry:2
+    restart: always
+    ports:
+      - "${REGISTRY_PORT:-5050}:5000"
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes:
+      - "${REGISTRY_DATA_DIR:-./data/registry}:/var/lib/registry"
+
+  ui:
+    image: joxit/docker-registry-ui:2
+    restart: always
+    ports:
+      - "${UI_PORT:-8090}:80"
+    environment:
+      SINGLE_REGISTRY: "true"
+      REGISTRY_TITLE: MCPDock
+      NGINX_PROXY_PASS_URL: http://registry:5000
+      NGINX_RESOLVER: 127.0.0.11
+      DELETE_IMAGES: "true"
+      SHOW_CONTENT_DIGEST: "true"
+    depends_on:
+      - registry

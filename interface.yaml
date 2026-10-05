@@ -1,0 +1,41 @@
+name: mcpdock
+description: 一条命令部署带 Web UI 的 Docker 私有仓库（官方 registry:2 + joxit/docker-registry-ui）。
+docs: docs/server/registry/README.md
+
+input:
+  command: docker compose up -d   # 在项目根目录执行；停止用 docker compose down
+  env:                            # 均可选，可写在根目录 .env 或命令行环境变量中
+    REGISTRY_PORT:
+      default: 5050
+      description: 仓库 API 在宿主机上的端口，docker push/pull 使用
+    UI_PORT:
+      default: 8090
+      description: Web UI 在宿主机上的端口
+    REGISTRY_DATA_DIR:
+      default: ./data/registry
+      description: 仓库数据在宿主机上的目录
+
+output:
+  registry: http://localhost:${REGISTRY_PORT}
+  ui: http://localhost:${UI_PORT}
+  usage:
+    push: |
+      docker tag <image> localhost:${REGISTRY_PORT}/<name>:<tag>
+      docker push localhost:${REGISTRY_PORT}/<name>:<tag>
+    pull: docker pull localhost:${REGISTRY_PORT}/<name>:<tag>
+
+contract:
+  - push 到 localhost:${REGISTRY_PORT} 的镜像可被 pull 回来，内容一致。
+  - UI 根路径返回 Web 页面；UI 的 /v2/ 路径反代到仓库 API（与仓库 API 同源，无需 CORS）。
+  - UI 可列出仓库中的镜像与 tag，并可删除 tag（通过 UI 的 /v2/ 以 manifest digest 删除）。
+  - 仓库数据保存在 ${REGISTRY_DATA_DIR}；docker compose down 后重新 up，已 push 的镜像仍在。
+  - 删除 tag 只删除引用；释放磁盘需执行 docker compose exec registry registry garbage-collect /etc/docker/registry/config.yml。
+
+errors:
+  PORT_IN_USE: REGISTRY_PORT 或 UI_PORT 已被占用时 compose 启动失败；改用其它端口重试。
+
+depends: []
+modules: []
+
+tests:
+  integration: tests/integration.sh   # 用临时端口、临时数据目录和独立 compose 项目名运行，不影响正在使用的实例
