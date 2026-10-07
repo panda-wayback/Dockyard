@@ -162,11 +162,11 @@ expect(set(tools) == {"set_image_info", "list_images", "search_images"},
        f"工具列表异常：{set(tools)}")
 desc = tools["set_image_info"]["description"]
 expect(f"{BASE}/upload" in desc, "set_image_info 说明缺少上传地址")
-for text in ("## 功能", "## 使用", "## 配置", "${REGISTRY}"):
+for text in ("## 功能", "## 使用", "## 配置", "${REGISTRY}", "pull_policy: always"):
     expect(text in desc, f"set_image_info 说明缺少 {text!r}")
 expect(tools["set_image_info"]["inputSchema"]["required"]
        == ["image", "summary", "readme"], "set_image_info 参数应为 image、summary、readme")
-print("PASS: tools/list 返回三个工具，说明含上传地址、必需节与 ${REGISTRY} 写法")
+print("PASS: tools/list 返回三个工具，说明含上传地址、必需节、${REGISTRY} 写法与 pull_policy")
 
 # 空仓库
 expect(payload_of(call("list_images", {}))["repositories"] == [],

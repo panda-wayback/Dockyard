@@ -127,6 +127,7 @@ README_TEMPLATE = """## 功能
 services:
   <服务名>:
     image: ${REGISTRY}/<image>:latest
+    pull_policy: always
     ports:
       - "<宿主机端口>:<容器端口>"
     environment:
@@ -165,7 +166,8 @@ def tools_for(base_url):
                 "readme 为 Markdown，必须包含 " + "、".join(REQUIRED_SECTIONS)
                 + " 三个二级标题（缺任一节登记失败），可另加其它节。"
                 "使用节给出可直接复制的 docker-compose.yml，镜像写作 "
-                "${REGISTRY}/<image>:latest（REGISTRY 为仓库地址）。模板：\n"
+                "${REGISTRY}/<image>:latest（REGISTRY 为仓库地址），"
+                "并设置 pull_policy: always，使每次 docker compose up 都拉取最新版本。模板：\n"
                 + README_TEMPLATE
             ),
             "inputSchema": {
