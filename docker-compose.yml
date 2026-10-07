@@ -33,9 +33,6 @@ services:
       REGISTRY_API: http://registry:5000
       META_DIR: /data
     volumes:
-      - mcp-data:/data
+      - "${MCP_DATA_DIR:-./data/mcp}:/data"
     depends_on:
       - registry
-
-volumes:
-  mcp-data:

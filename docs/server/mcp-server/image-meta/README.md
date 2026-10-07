@@ -10,6 +10,7 @@
   - `## 功能`：镜像做什么、提供哪些能力。
   - `## 使用`：可直接复制的 `docker-compose.yml` 示例，以及启动后如何访问或调用（端口、接口、首次初始化步骤）；示例中镜像写作 `${REGISTRY}/<镜像名>:latest`（`REGISTRY` 为仓库地址），并设置 `pull_policy: always`，每次 `docker compose up` 都拉取仓库中的最新版本。
   - `## 配置`：环境变量（是否必填、默认值、含义）、端口、数据卷、依赖的其它服务。
+- `docker-compose.yml` 示例中的持久化数据一律挂载到 compose 文件所在目录下的相对路径（如 `./data:/data`），禁止命名卷（如 `xxx-data:/data`）和宿主机绝对路径（如 `/opt/xxx:/data`）；容器以非 root 用户运行时，配置节写明创建目录并授权的命令（如 `mkdir -p ./data && sudo chown 1000:1000 ./data`）。
 - 缺少任一必需节时登记失败，错误信息指出缺少哪几节。
 - 登记时镜像必须已存在于仓库中，否则报错，避免镜像名写错导致简介丢失。
 - MCP 列出仓库镜像时，每个镜像返回简介与镜像 README；未登记的镜像这两个字段为空。
@@ -22,11 +23,12 @@
 - 修改：Module `mcp-server/`
   - 登记工具 `set_image_info`：输入镜像名、简介、镜像 README；校验三个必需节；工具说明给出镜像 README 模板，要求 AI 上传后阅读项目自行撰写。
   - `list_images`、`search_images`：返回与匹配镜像 README。
-- 修改：根 Module 的 `Makefile` 增加 `clean-meta`，清空 mcp 服务元数据卷中的登记。
+- 修改：根 Module 的 `Makefile` 增加 `clean-meta`，清空 mcp 服务元数据目录中的登记。
 - 存储取舍：描述存在 mcp-server 侧独立元数据中，不写入 registry 与镜像 manifest；理由是不改官方 registry、可随时更新描述、搜索不必拉取各 tag 的 manifest。
 - 粒度取舍：镜像级而非 tag 级；简介回答“这个镜像是什么”，版本差异由 tag 表达。
 - 结构取舍：镜像 README 用一个 Markdown 字段，服务端只校验必需节，不拆成功能、使用、配置多个字段；理由是与项目 README 写法一致，可按镜像需要自由补充其它节。
 - 拉取取舍：示例用 `latest` 加 `pull_policy: always`，不固定版本 tag；理由是开发阶段始终使用最新版本，无需每次升级改 compose 文件，回滚时再改用版本 tag。
+- 数据卷取舍：示例用项目目录下的目录挂载，不用命名卷；理由是数据随项目目录存放，查看、备份、迁移与删除都直观，代价是非 root 容器需先授权目录。
 - 镜像地址取舍：示例用 compose 变量 `${REGISTRY}`，不写死仓库地址；理由是 MCP 服务器不知道仓库对外地址，变量写法是 compose 通用格式，设置变量即可直接使用。
 ## 不做
 - tag 级描述。

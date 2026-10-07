@@ -4,7 +4,7 @@
 随私有仓库一起提供一个 MCP 服务器和配置页，IDE 复制页面生成的 JSON 后，AI 即可在本机构建镜像并上传到本仓库、登记镜像简介，并查看与查找仓库中的镜像；客户端除 Docker 外无需任何配置。
 
 ## 需求
-- `docker compose up -d` 后 MCP 服务器随仓库启动，暴露一个宿主机端口（`MCP_PORT`，默认 20080）。
+- `docker compose up -d` 后 MCP 服务器随仓库启动，暴露一个宿主机端口（`MCP_PORT`，默认 20080）；登记数据保存在项目目录下（`MCP_DATA_DIR`，默认 `./data/mcp`）。
 - 浏览器打开 MCP 服务器根路径看到配置页：
   - 可填写/修改 MCP 服务器自己的访问网址，默认取当前页面的访问地址。
   - 按该网址实时生成 `mcpServers` JSON（streamable-http，含 `url` 字段），可一键复制。
@@ -20,7 +20,7 @@
 - 子功能：[镜像简介与搜索](image-meta/README.md)，上传后登记简介与镜像 README，并按关键字查找镜像。
 - 子功能：[镜像简介网页](image-page/README.md)，在配置页下方浏览镜像简介并按关键字筛选。
 - 新增：Module `mcp-server/`，职责为提供配置页、streamable-http MCP 端点与镜像上传端点；上传的镜像经仓库 HTTP API 推入本仓库，通过仓库 API 列出镜像，并保存镜像简介。
-- 修改：根 Module（项目根目录）的 compose 增加 mcp 服务、`MCP_PORT` 环境变量与集成测试；mcp 服务经 compose 内网访问仓库，不挂载 Docker socket。
+- 修改：根 Module（项目根目录）的 compose 增加 mcp 服务、`MCP_PORT` 与 `MCP_DATA_DIR`（登记数据目录，默认 `./data/mcp`，与仓库数据同在项目 `data/` 下）环境变量与集成测试；mcp 服务经 compose 内网访问仓库，不挂载 Docker socket。
 - 配置页的网址只在浏览器端拼接，服务端不保存任何配置。
 - 取舍：镜像经 MCP 服务器中转推送，不让客户端直接 `docker push`；理由是 Docker 只允许对 localhost 用 HTTP 推送，中转后由服务器对本机仓库推送，客户端零配置。
 - 取舍：不在 MCP 服务器上构建；理由是项目代码在客户端，远程部署时服务器上没有项目目录。

@@ -133,7 +133,7 @@ services:
     environment:
       <变量名>: <值>
     volumes:
-      - <卷或宿主机目录>:<容器路径>
+      - ./data:<容器数据路径>
 ```
 <启动后如何访问或调用：端口、接口、首次初始化步骤>
 
@@ -142,7 +142,7 @@ services:
 |---|---|---|---|
 | <变量名> | 是/否 | <默认值> | <含义> |
 
-<端口、数据卷与依赖的其它服务>"""
+<端口、数据目录与依赖的其它服务；容器以非 root 用户运行时写明：mkdir -p ./data && sudo chown <uid>:<gid> ./data>"""
 
 
 def tools_for(base_url):
@@ -167,7 +167,11 @@ def tools_for(base_url):
                 + " 三个二级标题（缺任一节登记失败），可另加其它节。"
                 "使用节给出可直接复制的 docker-compose.yml，镜像写作 "
                 "${REGISTRY}/<image>:latest（REGISTRY 为仓库地址），"
-                "并设置 pull_policy: always，使每次 docker compose up 都拉取最新版本。模板：\n"
+                "并设置 pull_policy: always，使每次 docker compose up 都拉取最新版本。"
+                "持久化数据一律挂载到 compose 文件所在目录下的相对路径（如 ./data:/data，"
+                "多个数据目录用 ./data/<子目录>），禁止命名卷（如 xxx-data:/data）"
+                "和宿主机绝对路径（如 /opt/xxx:/data）；容器以非 root 用户运行时，"
+                "在配置节写明先创建目录并授权的命令。模板：\n"
                 + README_TEMPLATE
             ),
             "inputSchema": {

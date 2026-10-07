@@ -7,6 +7,7 @@ export REGISTRY_PORT="${IT_REGISTRY_PORT:-21070}"
 export UI_PORT="${IT_UI_PORT:-21090}"
 export MCP_PORT="${IT_MCP_PORT:-21080}"
 export REGISTRY_DATA_DIR="$(mktemp -d)"
+export MCP_DATA_DIR="$(mktemp -d)"
 WORK_DIR="$(mktemp -d)"
 
 REGISTRY="localhost:${REGISTRY_PORT}"
@@ -25,7 +26,7 @@ compose() { docker compose -f "$ROOT/docker-compose.yml" --project-directory "$R
 cleanup() {
   compose down -v >/dev/null 2>&1 || true
   docker rmi -f "$IMAGE" "$MCP_IMAGE" >/dev/null 2>&1 || true
-  rm -rf "$REGISTRY_DATA_DIR" "$WORK_DIR"
+  rm -rf "$REGISTRY_DATA_DIR" "$MCP_DATA_DIR" "$WORK_DIR"
 }
 trap cleanup EXIT
 
@@ -166,7 +167,8 @@ start
 tags | grep -q "\"${TAG}\"" || fail "down 后重新 up，tag 丢失"
 RESP="$(mcp_call search_images '{"keyword": "问候"}')"
 echo "$RESP" | grep -q "$MCP_SUMMARY" || fail "重启后简介丢失：$RESP"
-pass "数据与镜像简介持久化"
+[ -n "$(ls -A "$MCP_DATA_DIR")" ] || fail "登记数据未写入 MCP_DATA_DIR"
+pass "数据与镜像简介持久化，登记数据在 MCP_DATA_DIR 目录中"
 
 # make clean-meta 清空登记，镜像仍在
 make -C "$ROOT" clean-meta >/dev/null || fail "make clean-meta 失败"

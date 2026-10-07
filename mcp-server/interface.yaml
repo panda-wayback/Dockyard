@@ -26,7 +26,7 @@ input:
       readme 必须包含二级标题 `## 功能`、`## 使用`、`## 配置` 三节，可另加其它节。
       工具说明给出：上传流程（本机 docker build、docker save、curl 上传到本服务 /upload，上传地址取自客户端访问本服务所用的 Host，有 X-Forwarded-Proto 时采用其协议）；
       tag 规范（每次上传同时打版本 tag 与 latest，版本 tag 优先取项目版本号，没有则取 git commit 短哈希）；
-      readme 模板（使用节含 docker-compose.yml 示例，镜像写作 ${REGISTRY}/<image>:latest 并设置 pull_policy: always）；并要求 AI 上传后阅读项目 README、文档与代码自行撰写 summary 与 readme，不向用户询问。
+      readme 模板（使用节含 docker-compose.yml 示例，镜像写作 ${REGISTRY}/<image>:latest 并设置 pull_policy: always；持久化数据挂载到 compose 文件所在目录下的 ./data 相对路径，禁止命名卷和宿主机绝对路径，非 root 容器在配置节写明目录授权命令）；并要求 AI 上传后阅读项目 README、文档与代码自行撰写 summary 与 readme，不向用户询问。
   - name: tool list_images
     type: '{}'
     desc: 列出仓库中的镜像、tag、简介与 README
@@ -65,7 +65,7 @@ contract:
   - REGISTRY_API 不可达时 GET / 仍返回 200 与配置区，镜像列表处显示「仓库不可访问」及原因。
   - POST /mcp 对每个 JSON-RPC 请求返回单个 application/json 响应；initialize 协商后可调用 tools/list 与 tools/call。
   - GET /mcp 返回 405 且带 Allow: POST（不提供 SSE 流），streamable-http 客户端据此只用 POST，不视为会话失效。
-  - tools/list 返回 set_image_info、list_images 与 search_images 三个工具；set_image_info 的说明中包含 <协议>://<Host>/upload 上传地址、`## 功能`、`## 使用`、`## 配置` 三个必需节、${REGISTRY} 镜像写法与 pull_policy: always。
+  - tools/list 返回 set_image_info、list_images 与 search_images 三个工具；set_image_info 的说明中包含 <协议>://<Host>/upload 上传地址、`## 功能`、`## 使用`、`## 配置` 三个必需节、${REGISTRY} 镜像写法、pull_policy: always 与 ./data 目录挂载要求。
   - PUT /upload 成功后，对每个给定 tag，docker pull <仓库地址>/<image>:<tag> 得到与上传镜像内容一致的镜像，各 tag 的 manifest digest 相同；同名 tag 已存在时被覆盖；不影响 MCP 服务器所在主机的 Docker 镜像。
   - PUT /upload 的 image 不合法、没有 tag、任一 tag 不合法或缺少 Content-Length 时返回 400 INVALID_ARGUMENT，不写入任何 tag；请求体不是可识别的 docker save 镜像文件时返回 400 INVALID_IMAGE_ARCHIVE。
   - PUT /upload 按给出顺序写入各 tag；写入中途失败返回 PUSH_FAILED，失败前已写入的 tag 保留。

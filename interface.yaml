@@ -17,6 +17,9 @@ input:
     REGISTRY_DATA_DIR:
       default: ./data/registry
       description: 仓库数据在宿主机上的目录
+    MCP_DATA_DIR:
+      default: ./data/mcp
+      description: MCP 服务镜像简介与 README 登记数据在宿主机上的目录
 
 output:
   registry: http://localhost:${REGISTRY_PORT}
@@ -31,7 +34,7 @@ contract:
   - push 到 localhost:${REGISTRY_PORT} 的镜像可被 pull 回来，内容一致。
   - UI 根路径返回 Web 页面；UI 的 /v2/ 路径反代到仓库 API（与仓库 API 同源，无需 CORS）。
   - UI 可列出仓库中的镜像与 tag，并可删除 tag（通过 UI 的 /v2/ 以 manifest digest 删除）。
-  - 仓库数据保存在 ${REGISTRY_DATA_DIR}；docker compose down 后重新 up，已 push 的镜像仍在。
+  - 仓库数据保存在 ${REGISTRY_DATA_DIR}，登记数据保存在 ${MCP_DATA_DIR}，均为宿主机目录，不使用 Docker 命名卷；docker compose down 后重新 up，已 push 的镜像与登记仍在。
   - 删除 tag 只删除引用；释放磁盘需执行 docker compose exec registry registry garbage-collect /etc/docker/registry/config.yml。
   - compose 已启动时，在项目根目录执行 make clean-meta 清空全部镜像简介与 README 登记，无需重启；仓库中的镜像与 tag 不受影响。
   - 客户端把 docker save 导出的镜像 PUT 到 http://<MCP 地址>/upload?image=<name>&tag=<tag>[&tag=<tag>...] 即推入本仓库并打上全部 tag，客户端无需 HTTPS 或 insecure-registries 配置；经 MCP set_image_info 登记的简介与 README 可通过 list_images / search_images 查看与查找，compose 重启后仍在。
