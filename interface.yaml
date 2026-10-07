@@ -33,6 +33,7 @@ contract:
   - UI 可列出仓库中的镜像与 tag，并可删除 tag（通过 UI 的 /v2/ 以 manifest digest 删除）。
   - 仓库数据保存在 ${REGISTRY_DATA_DIR}；docker compose down 后重新 up，已 push 的镜像仍在。
   - 删除 tag 只删除引用；释放磁盘需执行 docker compose exec registry registry garbage-collect /etc/docker/registry/config.yml。
+  - compose 已启动时，在项目根目录执行 make clean-meta 清空全部镜像简介与 README 登记，无需重启；仓库中的镜像与 tag 不受影响。
   - 客户端把 docker save 导出的镜像 PUT 到 http://<MCP 地址>/upload?image=<name>&tag=<tag>[&tag=<tag>...] 即推入本仓库并打上全部 tag，客户端无需 HTTPS 或 insecure-registries 配置；经 MCP set_image_info 登记的简介与 README 可通过 list_images / search_images 查看与查找，compose 重启后仍在。
 
 errors:

@@ -59,7 +59,7 @@ docker build -q -t "$LOCAL_IMAGE" "$WORK_DIR/proj" >/dev/null
 docker save -o "$WORK_DIR/image.tar" "$LOCAL_IMAGE"
 printf 'not a tar' > "$WORK_DIR/garbage.tar"
 
-export SPORT RPORT WORK_DIR REPO REPO2 TAG PULLED REFERENCE2 CONTENT REGNAME
+export SPORT RPORT WORK_DIR META_DIR REPO REPO2 TAG PULLED REFERENCE2 CONTENT REGNAME
 
 python3 - <<'PY'
 import json
@@ -332,6 +332,15 @@ print("PASS: 参数缺失或空白返回 -32602")
 r = rpc("no/such", {})
 expect(r["error"]["code"] == -32601, f"应返回方法不存在：{r}")
 print("PASS: 未知方法返回 -32601")
+
+# 清空 META_DIR 即清空全部登记，无需重启
+META_DIR = os.environ["META_DIR"]
+for entry in os.listdir(META_DIR):
+    os.remove(os.path.join(META_DIR, entry))
+found = payload_of(call("list_images", {}))["repositories"]
+expect(found and all(x["summary"] == "" and x["readme"] == "" for x in found),
+       f"清空 META_DIR 后所有登记应为空：{found}")
+print("PASS: 清空 META_DIR 后全部登记清空，镜像仍在")
 
 # 仓库不可访问：页面仍可用
 subprocess.run(["docker", "stop", os.environ["REGNAME"]], check=True,

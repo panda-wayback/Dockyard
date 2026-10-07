@@ -168,6 +168,13 @@ RESP="$(mcp_call search_images '{"keyword": "问候"}')"
 echo "$RESP" | grep -q "$MCP_SUMMARY" || fail "重启后简介丢失：$RESP"
 pass "数据与镜像简介持久化"
 
+# make clean-meta 清空登记，镜像仍在
+make -C "$ROOT" clean-meta >/dev/null || fail "make clean-meta 失败"
+RESP="$(mcp_call list_images '{}')"
+echo "$RESP" | grep -q "\"name\": \"${MCP_REPO}\"" || fail "clean-meta 后镜像丢失：$RESP"
+if echo "$RESP" | grep -q "$MCP_SUMMARY"; then fail "clean-meta 后登记仍在：$RESP"; fi
+pass "make clean-meta 清空登记，镜像仍在"
+
 # 通过 UI 删除 tag
 DIGEST="$(curl -s -I -H "Accept: ${ACCEPT}" "${UI}/v2/${REPO}/manifests/${TAG}" \
   | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest"{print $2}')"

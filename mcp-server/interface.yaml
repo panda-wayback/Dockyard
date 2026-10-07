@@ -7,7 +7,7 @@ input:
     desc: 本进程访问仓库 HTTP API 的地址；默认 http://localhost:20070
   - name: env META_DIR
     type: string，目录路径
-    desc: 镜像简介元数据的存储目录，需挂载持久化卷；默认 /data
+    desc: 镜像简介元数据的存储目录，需挂载持久化卷；默认 /data。删除该目录下全部内容即清空全部登记，无需重启服务
   - name: HTTP GET /
     type: 无
     desc: 返回 MCP 配置页与仓库镜像列表（HTML）
@@ -70,8 +70,7 @@ contract:
   - PUT /upload 的 image 不合法、没有 tag、任一 tag 不合法或缺少 Content-Length 时返回 400 INVALID_ARGUMENT，不写入任何 tag；请求体不是可识别的 docker save 镜像文件时返回 400 INVALID_IMAGE_ARCHIVE。
   - PUT /upload 按给出顺序写入各 tag；写入中途失败返回 PUSH_FAILED，失败前已写入的 tag 保留。
   - set_image_info 按镜像名保存 summary 与 readme（覆盖该镜像旧值），与 tag 无关；镜像在仓库中不存在或没有 tag 时返回 IMAGE_NOT_FOUND；summary 或 readme 缺失或为空白时返回参数错误；readme 缺少 `## 功能`、`## 使用`、`## 配置` 任一行（标题行去首尾空白后完全一致，围栏代码块内的不算）时返回参数错误，message 列出全部缺少的节。
-  - list_images 返回 REGISTRY_API 中全部 repositories 及各自 tags、summary、readme；空仓库返回空列表。
-  - search_images 对 list_images 同样的镜像集合做大小写不敏感的子串匹配，keyword 命中 name、summary 或 readme 任一字段即返回；keyword 为空白时返回参数错误；无匹配返回空列表。
+  - list_images 返回 REGISTRY_API 中全部 repositories 及各自 tags、summary、readme；空仓库返回空列表。  - search_images 对 list_images 同样的镜像集合做大小写不敏感的子串匹配，keyword 命中 name、summary 或 readme 任一字段即返回；keyword 为空白时返回参数错误；无匹配返回空列表。
   - REGISTRY_API 不可达时上传、set_image_info、list_images、search_images 返回 REGISTRY_UNAVAILABLE；元数据无法写入时 set_image_info 返回 META_WRITE_FAILED。
 
 errors:
