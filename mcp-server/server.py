@@ -31,6 +31,8 @@ NAME_RE = re.compile(
 )
 TAG_RE = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$")
 
+PLATFORM = "linux/amd64"
+
 OCI_MANIFEST = "application/vnd.oci.image.manifest.v1+json"
 OCI_CONFIG = "application/vnd.oci.image.config.v1+json"
 OCI_LAYER = "application/vnd.oci.image.layer.v1.tar"
@@ -156,7 +158,8 @@ def tools_for(base_url):
                 "1. 确定版本 tag：优先取项目版本号（如 package.json、pyproject.toml "
                 "中的 version），没有则取 git rev-parse --short HEAD；"
                 "每次上传同时打版本 tag 与 latest。\n"
-                "2. docker build -t <image>:<版本> <项目目录>\n"
+                f"2. docker build --platform {PLATFORM} -t <image>:<版本> <项目目录>"
+                f"（上传只接受 {PLATFORM} 镜像，macOS 上也必须带 --platform）\n"
                 "3. docker save -o <临时文件>.tar <image>:<版本>\n"
                 f"4. curl --fail-with-body -T <临时文件>.tar '{upload}'\n"
                 "5. 阅读项目的 README、文档与代码，自行撰写 summary 与 readme，"
@@ -171,7 +174,8 @@ def tools_for(base_url):
                 "持久化数据一律挂载到 compose 文件所在目录下的相对路径（如 ./data:/data，"
                 "多个数据目录用 ./data/<子目录>），禁止命名卷（如 xxx-data:/data）"
                 "和宿主机绝对路径（如 /opt/xxx:/data）；容器以非 root 用户运行时，"
-                "在配置节写明先创建目录并授权的命令。模板：\n"
+                "在配置节写明先创建目录并授权的命令。"
+                "登记时服务端按以上规则校验 readme，不符合会返回错误，按错误提示修改后重试。模板：\n"
                 + README_TEMPLATE
             ),
             "inputSchema": {
@@ -334,6 +338,17 @@ def push_archive(archive_path, image, tags):
             raise ToolError("INVALID_IMAGE_ARCHIVE",
                             f"manifest.json 格式不正确：{exc}")
 
+        try:
+            config = json.load(member(config_path))
+            platform = f"{config.get('os')}/{config.get('architecture')}"
+        except (ValueError, AttributeError) as exc:
+            raise ToolError("INVALID_IMAGE_ARCHIVE", f"镜像配置格式不正确：{exc}")
+        if platform != PLATFORM:
+            raise ToolError(
+                "UNSUPPORTED_PLATFORM",
+                f"镜像平台为 {platform}，仅支持 {PLATFORM}；"
+                f"请用 docker build --platform {PLATFORM} 重新构建后再上传")
+
         descriptors = []
         for path, media_type in ([(config_path, OCI_CONFIG)]
                                  + [(p, None) for p in layer_paths]):
@@ -386,6 +401,96 @@ def _lines_outside_fences(text):
 def missing_sections(readme):
     present = set(_lines_outside_fences(readme))
     return [s for s in REQUIRED_SECTIONS if s not in present]
+
+
+_VOLUME_SOURCE_OK = re.compile(r"^(\./|\$\{[A-Za-z_][A-Za-z0-9_]*:-\./)")
+_LONG_VOLUME_KEY = re.compile(r"^(\w+):(?:\s+(.*))?$")
+VOLUME_HINT = "数据卷须挂载到 ./ 开头的相对路径，如 ./data:<容器路径>"
+
+
+def _compose_blocks(text):
+    blocks, block = [], None
+    for line in text.splitlines():
+        if line.strip().startswith("```"):
+            if block is None:
+                block = []
+            else:
+                blocks.append(block)
+                block = None
+        elif block is not None:
+            block.append(line)
+    return [b for b in blocks if any(l.rstrip() == "services:" for l in b)]
+
+
+def _short_volume_source(spec):
+    if spec.startswith("${") and "}" in spec:
+        end = spec.index("}") + 1
+        return spec[:end] if spec[end:].startswith(":") else ""
+    return spec.split(":", 1)[0] if ":" in spec else ""
+
+
+def _compose_problems(block):
+    problems = []
+    images = pulls = 0
+    vol_indent = None
+
+    def check_source(source):
+        if not _VOLUME_SOURCE_OK.match(source):
+            problems.append(f"数据卷来源 {source or '（匿名卷）'} 不是 ./ 开头的相对路径，"
+                            f"禁止命名卷、绝对路径与匿名卷；{VOLUME_HINT}")
+
+    for line in block:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if vol_indent is not None and (
+                indent < vol_indent
+                or (indent == vol_indent and not stripped.startswith("-"))):
+            vol_indent = None
+        if stripped.startswith("volumes:"):
+            if indent == 0:
+                problems.append(f"不得有顶层 volumes: 声明（命名卷）；{VOLUME_HINT}")
+            else:
+                vol_indent = indent
+            continue
+        if stripped.startswith("image:") and "${REGISTRY}" in stripped:
+            images += 1
+        if re.fullmatch(r"pull_policy:\s*[\"']?always[\"']?", stripped):
+            pulls += 1
+        if vol_indent is None:
+            continue
+        is_item = stripped.startswith("-")
+        body = stripped[1:].strip() if is_item else stripped
+        m = _LONG_VOLUME_KEY.match(body)
+        if m:
+            key, value = m.group(1), (m.group(2) or "").strip("\"' ")
+            if key == "type" and value == "volume":
+                problems.append(f"数据卷不得使用 type: volume（命名卷）；{VOLUME_HINT}")
+            elif key == "source":
+                check_source(value)
+        elif is_item:
+            check_source(_short_volume_source(body.strip("\"'")))
+    if images > pulls:
+        problems.append("使用 ${REGISTRY} 镜像的服务须设置 pull_policy: always")
+    return problems
+
+
+def readme_problems(readme, image):
+    problems = []
+    missing = missing_sections(readme)
+    if missing:
+        problems.append("缺少必需节：" + "、".join(missing))
+    blocks = _compose_blocks(readme)
+    if not blocks:
+        problems.append("缺少 docker-compose.yml 示例（含行首 services: 的代码块）")
+    else:
+        ref = f"${{REGISTRY}}/{image}:"
+        if not any(ref in line for block in blocks for line in block):
+            problems.append(f"compose 示例中本镜像须写作 {ref}latest")
+        for block in blocks:
+            problems.extend(_compose_problems(block))
+    return list(dict.fromkeys(problems))
 
 
 def _inline(text):
@@ -486,9 +591,9 @@ def set_image_info(arguments):
         raise ValueError("summary 不能为空")
     if not readme:
         raise ValueError("readme 不能为空")
-    missing = missing_sections(readme)
-    if missing:
-        raise ValueError("readme 缺少必需节：" + "、".join(missing))
+    problems = readme_problems(readme, image)
+    if problems:
+        raise ValueError("readme 不符合要求：" + "；".join(problems))
 
     status, _, body = _registry("GET", f"{_repo_url(image)}/tags/list")
     tags = []
@@ -730,7 +835,9 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 result = push_archive(archive, image, tags)
             except ToolError as exc:
-                status = 400 if exc.code == "INVALID_IMAGE_ARCHIVE" else 502
+                status = (400 if exc.code in ("INVALID_IMAGE_ARCHIVE",
+                                              "UNSUPPORTED_PLATFORM")
+                          else 502)
                 return fail(status, exc.code, str(exc))
             self._send_json(200, result)
         finally:

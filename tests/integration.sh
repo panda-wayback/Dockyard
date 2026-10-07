@@ -112,13 +112,14 @@ docker rm "$CID" >/dev/null
 [ "$(cat "$WORK_DIR/pulled.txt")" = "$CONTENT" ] || fail "pull 回来的内容与 push 的不一致"
 pass "docker pull 内容一致"
 
-# 客户端流程：本机构建（多层基础镜像）→ docker save → 上传到 MCP → 登记简介
+# 客户端流程：本机按 linux/amd64 构建（多层）→ docker save → 上传到 MCP → 登记简介
 MCP_PROJ="$WORK_DIR/mcp-proj"
 MCP_LOCAL="mcpdock-it-local-$$:${TAG}"
 mkdir -p "$MCP_PROJ"
 printf '# Hello MCP\n\n一个演示问候服务。\n' > "$MCP_PROJ/README.md"
-printf 'FROM registry:2\nCOPY README.md /README.md\n' > "$MCP_PROJ/Dockerfile"
-docker build -q -t "$MCP_LOCAL" "$MCP_PROJ" >/dev/null
+printf '%s' "$CONTENT" > "$MCP_PROJ/content.txt"
+printf 'FROM scratch\nCOPY content.txt /content.txt\nCOPY README.md /README.md\nCMD ["/content.txt"]\n' > "$MCP_PROJ/Dockerfile"
+docker build -q --platform linux/amd64 -t "$MCP_LOCAL" "$MCP_PROJ" >/dev/null
 docker save -o "$WORK_DIR/mcp.tar" "$MCP_LOCAL"
 docker rmi -f "$MCP_LOCAL" >/dev/null
 RESP="$(curl -s --fail-with-body -T "$WORK_DIR/mcp.tar" \
@@ -134,7 +135,7 @@ cmp -s "$WORK_DIR/mcp-readme.md" "$MCP_PROJ/README.md" || fail "上传镜像内�
 pass "镜像经 MCP 上传端点推入仓库（同时打版本 tag 与 latest），可 pull 且内容一致"
 
 MCP_SUMMARY="演示用问候镜像"
-MCP_README="$(printf '## 功能\n- 提供问候与演示功能\n\n## 使用\n```yaml\nservices:\n  hello:\n    image: ${REGISTRY}/%s:latest\n```\n\n## 配置\n无环境变量。' "$MCP_REPO")"
+MCP_README="$(printf '## 功能\n- 提供问候与演示功能\n\n## 使用\n```yaml\nservices:\n  hello:\n    image: ${REGISTRY}/%s:latest\n    pull_policy: always\n```\n\n## 配置\n无环境变量。' "$MCP_REPO")"
 ARGS="$(python3 - "$MCP_REPO" "$MCP_SUMMARY" "$MCP_README" <<'PY'
 import json, sys
 print(json.dumps({"image": sys.argv[1], "summary": sys.argv[2],

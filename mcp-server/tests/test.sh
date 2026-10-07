@@ -19,6 +19,7 @@ REPO="mcpdock-test/hello"
 REPO2="mcpdock-test/plain"
 TAG="test-tag"
 LOCAL_IMAGE="mcpdock-test-local-$$:${TAG}"
+ARM_IMAGE="mcpdock-test-arm-$$:${TAG}"
 PULLED="localhost:${RPORT}/${REPO}:${TAG}"
 REFERENCE2="localhost:${RPORT}/${REPO2}:${TAG}"
 CONTENT="mcpdock-mcp-$(date +%s)-$RANDOM"
@@ -26,7 +27,7 @@ CONTENT="mcpdock-mcp-$(date +%s)-$RANDOM"
 cleanup() {
   kill "$SERVER_PID" 2>/dev/null || true
   docker rm -f "$REGNAME" >/dev/null 2>&1 || true
-  docker rmi -f "$LOCAL_IMAGE" "$PULLED" "$REFERENCE2" >/dev/null 2>&1 || true
+  docker rmi -f "$LOCAL_IMAGE" "$ARM_IMAGE" "$PULLED" "$REFERENCE2" >/dev/null 2>&1 || true
   rm -rf "$WORK_DIR" "$META_DIR"
 }
 trap cleanup EXIT
@@ -55,8 +56,10 @@ done
 mkdir -p "$WORK_DIR/proj"
 printf '%s' "$CONTENT" > "$WORK_DIR/proj/content.txt"
 printf 'FROM scratch\nCOPY content.txt /content.txt\nCMD ["/content.txt"]\n' > "$WORK_DIR/proj/Dockerfile"
-docker build -q -t "$LOCAL_IMAGE" "$WORK_DIR/proj" >/dev/null
+docker build -q --platform linux/amd64 -t "$LOCAL_IMAGE" "$WORK_DIR/proj" >/dev/null
 docker save -o "$WORK_DIR/image.tar" "$LOCAL_IMAGE"
+docker build -q --platform linux/arm64 -t "$ARM_IMAGE" "$WORK_DIR/proj" >/dev/null
+docker save -o "$WORK_DIR/arm.tar" "$ARM_IMAGE"
 printf 'not a tar' > "$WORK_DIR/garbage.tar"
 
 export SPORT RPORT WORK_DIR META_DIR REPO REPO2 TAG PULLED REFERENCE2 CONTENT REGNAME
@@ -162,12 +165,12 @@ expect(set(tools) == {"set_image_info", "list_images", "search_images"},
        f"工具列表异常：{set(tools)}")
 desc = tools["set_image_info"]["description"]
 expect(f"{BASE}/upload" in desc, "set_image_info 说明缺少上传地址")
-for text in ("## 功能", "## 使用", "## 配置", "${REGISTRY}", "pull_policy: always",
-             "./data:", "禁止命名卷", "绝对路径"):
+for text in ("--platform linux/amd64", "## 功能", "## 使用", "## 配置", "${REGISTRY}",
+             "pull_policy: always", "./data:", "禁止命名卷", "绝对路径"):
     expect(text in desc, f"set_image_info 说明缺少 {text!r}")
 expect(tools["set_image_info"]["inputSchema"]["required"]
        == ["image", "summary", "readme"], "set_image_info 参数应为 image、summary、readme")
-print("PASS: tools/list 返回三个工具，说明含上传地址、必需节、${REGISTRY} 写法、pull_policy 与 ./data 挂载要求")
+print("PASS: tools/list 返回三个工具，说明含上传地址、amd64 构建、必需节、${REGISTRY} 写法、pull_policy 与 ./data 挂载要求")
 
 # 空仓库
 expect(payload_of(call("list_images", {}))["repositories"] == [],
@@ -188,6 +191,15 @@ expect(registry_tags(REPO) == {TAG, "latest"},
 expect(manifest_digest(REPO, TAG) == manifest_digest(REPO, "latest")
        == body["digest"], "各 tag 应指向同一 manifest")
 print("PASS: 多个 tag 写入仓库且指向同一 manifest")
+
+# 非 linux/amd64 镜像被拒绝，不写入 tag
+status, body = upload(f"{WORK_DIR}/arm.tar", REPO, ["arm-tag"])
+expect(status == 400 and body["error"] == "UNSUPPORTED_PLATFORM"
+       and "linux/arm64" in body["message"]
+       and "--platform linux/amd64" in body["message"],
+       f"arm64 镜像应返回 400 UNSUPPORTED_PLATFORM：{status} {body}")
+expect("arm-tag" not in registry_tags(REPO), "平台不符时不应写入 tag")
+print("PASS: 上传 arm64 镜像返回 UNSUPPORTED_PLATFORM 且不写入")
 
 # 从仓库 pull 回来内容一致
 subprocess.run(["docker", "pull", "-q", PULLED], check=True,
@@ -212,6 +224,10 @@ README = """## 功能
 services:
   hello:
     image: ${REGISTRY}/mcpdock-test/hello:latest
+    pull_policy: always
+    volumes:
+      - ./data:/data
+      - "${CACHE_DIR:-./data/cache}:/cache"
 ```
 <script>alert(1)</script>
 
@@ -237,6 +253,45 @@ expect(r.get("error", {}).get("code") == -32602
        and "## 功能" not in r["error"]["message"],
        f"缺少必需节应返回 -32602 并列出 ## 使用、## 配置：{r}")
 print("PASS: README 缺少必需节返回参数错误并列出缺少的节")
+
+def readme_with(compose):
+    return f"## 功能\na\n## 使用\n```yaml\n{compose}\n```\n## 配置\nc"
+
+def readme_error(readme):
+    r = call("set_image_info", {"image": REPO, "summary": SUMMARY,
+                                "readme": readme})
+    expect(r.get("error", {}).get("code") == -32602,
+           f"不符合要求的 README 应返回 -32602：{r}")
+    return r["error"]["message"]
+
+msg = readme_error("## 功能\na\n## 使用\nb\n## 配置\nc")
+expect("docker-compose.yml" in msg, f"缺少 compose 示例应报错：{msg}")
+print("PASS: README 缺少 compose 示例返回参数错误")
+
+msg = readme_error(readme_with("""services:
+  hello:
+    image: example/hello:latest
+    volumes:
+      - app-data:/data
+      - /opt/hello:/conf
+      - /anon
+volumes:
+  app-data:"""))
+for text in ("${REGISTRY}/mcpdock-test/hello:", "app-data", "/opt/hello",
+             "匿名卷", "顶层 volumes"):
+    expect(text in msg, f"错误信息应包含 {text!r}：{msg}")
+print("PASS: 镜像地址、命名卷、绝对路径、匿名卷、顶层 volumes 一次全部报出")
+
+msg = readme_error(readme_with("""services:
+  hello:
+    image: ${REGISTRY}/mcpdock-test/hello:latest
+    volumes:
+      - type: volume
+        source: app-data
+        target: /data"""))
+for text in ("pull_policy: always", "type: volume", "app-data"):
+    expect(text in msg, f"错误信息应包含 {text!r}：{msg}")
+print("PASS: 缺少 pull_policy、长语法命名卷返回参数错误")
 
 # 未登记的镜像（直接推送）
 subprocess.run(["docker", "tag", PULLED, REFERENCE2], check=True)
@@ -282,8 +337,16 @@ expect("<script>alert" not in page and 'href="javascript:' not in page,
 print("PASS: GET / 按 Markdown 渲染 README，HTML 与非 http(s) 链接按文本显示")
 
 r = call("set_image_info", {"image": REPO2, "summary": "<b>粗体</b>",
-                            "readme": "## 功能\na\n## 使用\nb\n## 配置\nc"})
-expect(not r["result"].get("isError"), f"登记失败：{r}")
+                            "readme": readme_with("""services:
+  plain:
+    image: ${REGISTRY}/mcpdock-test/plain:latest
+    pull_policy: always
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data""")})
+expect(not r.get("error") and not r["result"].get("isError"),
+       f"长语法目录挂载的 README 应登记成功：{r}")
 page = page_text()
 expect("&lt;b&gt;粗体&lt;/b&gt;" in page and "<b>粗体" not in page,
        "页面未对简介做 HTML 转义")
@@ -310,7 +373,8 @@ print("PASS: 上传非镜像文件返回 INVALID_IMAGE_ARCHIVE")
 
 # 错误：登记不存在的镜像
 r = call("set_image_info", {"image": "mcpdock-test/nope",
-                            "summary": SUMMARY, "readme": README})
+                            "summary": SUMMARY,
+                            "readme": README.replace("/hello:", "/nope:")})
 expect(r["result"].get("isError")
        and "IMAGE_NOT_FOUND" in r["result"]["content"][0]["text"],
        f"应返回 IMAGE_NOT_FOUND：{r}")
