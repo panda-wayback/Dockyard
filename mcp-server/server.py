@@ -61,8 +61,16 @@ CONFIG_PAGE = """<!doctype html>
   .img .name { font-weight: 600; font-size: 16px; }
   .img .tags { margin-left: 8px; color: #6b7280; font-size: 13px; }
   .img .summary { margin: 8px 0 4px; }
-  .img .features { white-space: pre-wrap; color: #374151; font-size: 14px;
-                   line-height: 1.6; }
+  .readme { color: #374151; font-size: 14px; line-height: 1.6; }
+  .readme h1, .readme h2, .readme h3, .readme h4, .readme h5, .readme h6 {
+    font-size: 15px; margin: 14px 0 6px; }
+  .readme p, .readme ul, .readme ol { margin: 6px 0; }
+  .readme pre { font-size: 13px; padding: 12px; }
+  .readme code { background: #f3f4f6; padding: 1px 4px; border-radius: 4px; }
+  .readme pre code { background: none; padding: 0; }
+  .readme table { border-collapse: collapse; margin: 6px 0; }
+  .readme th, .readme td { border: 1px solid #e5e7eb; padding: 4px 8px;
+                           text-align: left; }
   .muted { color: #9ca3af; }
   .error { color: #dc2626; }
 </style>
@@ -78,7 +86,7 @@ CONFIG_PAGE = """<!doctype html>
   <code>~/.cursor/mcp.json</code>）。保存后 AI 即可把项目镜像上传到本仓库并登记简介。
 </p>
 <h2>仓库镜像</h2>
-<input id="filter" placeholder="按镜像名、简介、功能说明筛选" spellcheck="false" autocomplete="off">
+<input id="filter" placeholder="按镜像名、简介、README 筛选" spellcheck="false" autocomplete="off">
 <div id="images"><!--IMAGES--></div>
 <script>
   document.getElementById('filter').addEventListener('input', (e) => {
@@ -109,39 +117,74 @@ CONFIG_PAGE = """<!doctype html>
 """
 
 
+REQUIRED_SECTIONS = ("## 功能", "## 使用", "## 配置")
+
+README_TEMPLATE = """## 功能
+- <镜像提供的能力，逐条写>
+
+## 使用
+```yaml
+services:
+  <服务名>:
+    image: ${REGISTRY}/<image>:latest
+    ports:
+      - "<宿主机端口>:<容器端口>"
+    environment:
+      <变量名>: <值>
+    volumes:
+      - <卷或宿主机目录>:<容器路径>
+```
+<启动后如何访问或调用：端口、接口、首次初始化步骤>
+
+## 配置
+| 环境变量 | 必填 | 默认值 | 说明 |
+|---|---|---|---|
+| <变量名> | 是/否 | <默认值> | <含义> |
+
+<端口、数据卷与依赖的其它服务>"""
+
+
 def tools_for(base_url):
-    upload = f"{base_url}/upload?image=<image>&tag=<tag>"
+    upload = f"{base_url}/upload?image=<image>&tag=<版本>&tag=latest"
     return [
         {
             "name": "set_image_info",
             "description": (
-                "登记 MCPDock 私有仓库中镜像的简介与功能说明。"
+                "登记 MCPDock 私有仓库中镜像的一句话简介 summary 与镜像 README readme。"
                 "把项目镜像上传到仓库的完整流程（在用户本机执行命令）：\n"
-                "1. docker build -t <image>:<tag> <项目目录>\n"
-                "2. docker save -o <临时文件>.tar <image>:<tag>\n"
-                f"3. curl --fail-with-body -T <临时文件>.tar '{upload}'\n"
-                "4. 阅读项目的 README、文档与代码，自行提炼 summary（一句话简介）"
-                "与 features（功能说明），调用本工具登记，不要向用户询问这两项；"
-                "完成后删除临时文件。\n"
-                "image 为仓库内镜像名（小写，可含 / 路径），tag 为标签。"
-                "登记按镜像名保存，与 tag 无关，再次登记覆盖旧值。"
+                "1. 确定版本 tag：优先取项目版本号（如 package.json、pyproject.toml "
+                "中的 version），没有则取 git rev-parse --short HEAD；"
+                "每次上传同时打版本 tag 与 latest。\n"
+                "2. docker build -t <image>:<版本> <项目目录>\n"
+                "3. docker save -o <临时文件>.tar <image>:<版本>\n"
+                f"4. curl --fail-with-body -T <临时文件>.tar '{upload}'\n"
+                "5. 阅读项目的 README、文档与代码，自行撰写 summary 与 readme，"
+                "调用本工具登记，不要向用户询问；完成后删除临时文件。\n"
+                "image 为仓库内镜像名（小写，可含 / 路径）。"
+                "登记按镜像名保存，与 tag 无关，再次登记覆盖旧值。\n"
+                "readme 为 Markdown，必须包含 " + "、".join(REQUIRED_SECTIONS)
+                + " 三个二级标题（缺任一节登记失败），可另加其它节。"
+                "使用节给出可直接复制的 docker-compose.yml，镜像写作 "
+                "${REGISTRY}/<image>:latest（REGISTRY 为仓库地址）。模板：\n"
+                + README_TEMPLATE
             ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "image": {"type": "string", "description": "仓库内镜像名"},
                     "summary": {"type": "string",
-                                "description": "镜像一句话简介，阅读项目后自行提炼"},
-                    "features": {"type": "string",
-                                 "description": "镜像功能说明，阅读项目后自行提炼"},
+                                "description": "一句话说明镜像是什么"},
+                    "readme": {"type": "string",
+                               "description": "镜像 README（Markdown），"
+                                              "含 ## 功能、## 使用、## 配置 三节"},
                 },
-                "required": ["image", "summary", "features"],
+                "required": ["image", "summary", "readme"],
                 "additionalProperties": False,
             },
         },
         {
             "name": "list_images",
-            "description": "列出私有仓库中的全部镜像及其 tag、简介与功能说明。",
+            "description": "列出私有仓库中的全部镜像及其 tag、简介与 README。",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -152,7 +195,7 @@ def tools_for(base_url):
             "name": "search_images",
             "description": (
                 "按关键字查找私有仓库中的镜像，"
-                "在镜像名、简介 summary 与功能说明 features 中做大小写不敏感匹配。"
+                "在镜像名、简介 summary 与 README readme 中做大小写不敏感匹配。"
             ),
             "inputSchema": {
                 "type": "object",
@@ -259,7 +302,7 @@ def _push_blob(image, digest, size, open_body):
                         f"上传 blob {digest} 失败（{status}）：{body[:500]!r}")
 
 
-def push_archive(archive_path, image, tag):
+def push_archive(archive_path, image, tags):
     try:
         tar = tarfile.open(archive_path, "r:*")
     except (tarfile.TarError, OSError) as exc:
@@ -303,15 +346,126 @@ def push_archive(archive_path, image, tag):
         "config": descriptors[0],
         "layers": descriptors[1:],
     }).encode()
-    status, headers, body = _registry(
-        "PUT", f"{_repo_url(image)}/manifests/{tag}", data=manifest,
-        headers={"Content-Type": OCI_MANIFEST})
-    if status != 201:
-        raise ToolError("PUSH_FAILED",
-                        f"写入 manifest 失败（{status}）：{body[:500]!r}")
-    digest = headers.get("Docker-Content-Digest") or (
-        "sha256:" + hashlib.sha256(manifest).hexdigest())
-    return {"image": image, "tag": tag, "digest": digest}
+    digest = "sha256:" + hashlib.sha256(manifest).hexdigest()
+    for tag in tags:
+        status, headers, body = _registry(
+            "PUT", f"{_repo_url(image)}/manifests/{tag}", data=manifest,
+            headers={"Content-Type": OCI_MANIFEST})
+        if status != 201:
+            raise ToolError("PUSH_FAILED",
+                            f"写入 tag {tag} 失败（{status}）：{body[:500]!r}")
+        digest = headers.get("Docker-Content-Digest") or digest
+    return {"image": image, "tags": tags, "digest": digest}
+
+
+# ---------- Markdown ----------
+
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+_UL_RE = re.compile(r"^\s*[-*]\s+(.*)$")
+_OL_RE = re.compile(r"^\s*\d+[.)]\s+(.*)$")
+_TABLE_SEP_RE = re.compile(r"^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$")
+_INLINE_RE = re.compile(r"`([^`]+)`|\*\*(.+?)\*\*|\[([^\]]+)\]\(([^)\s]+)\)")
+
+
+def _lines_outside_fences(text):
+    in_fence = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+        elif not in_fence:
+            yield stripped
+
+
+def missing_sections(readme):
+    present = set(_lines_outside_fences(readme))
+    return [s for s in REQUIRED_SECTIONS if s not in present]
+
+
+def _inline(text):
+    out = []
+    pos = 0
+    for m in _INLINE_RE.finditer(text):
+        out.append(html.escape(text[pos:m.start()]))
+        code, bold, label, url = m.groups()
+        if code is not None:
+            out.append(f"<code>{html.escape(code)}</code>")
+        elif bold is not None:
+            out.append(f"<strong>{_inline(bold)}</strong>")
+        elif url.lower().startswith(("http://", "https://")):
+            out.append(f'<a href="{html.escape(url)}" target="_blank" '
+                       f'rel="noopener noreferrer">{_inline(label)}</a>')
+        else:
+            out.append(html.escape(m.group(0)))
+        pos = m.end()
+    out.append(html.escape(text[pos:]))
+    return "".join(out)
+
+
+def _starts_block(line):
+    stripped = line.strip()
+    return (stripped.startswith(("```", "|")) or _HEADING_RE.match(stripped)
+            or _UL_RE.match(line) or _OL_RE.match(line))
+
+
+def _table(rows):
+    def cells(row):
+        return [c.strip() for c in row.strip("|").split("|")]
+
+    if len(rows) < 2 or not _TABLE_SEP_RE.match(rows[1]):
+        return f"<p>{_inline(' '.join(rows))}</p>"
+    head = "".join(f"<th>{_inline(c)}</th>" for c in cells(rows[0]))
+    body = "".join(
+        "<tr>" + "".join(f"<td>{_inline(c)}</td>" for c in cells(r)) + "</tr>"
+        for r in rows[2:])
+    return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+
+
+def render_markdown(text):
+    """渲染 Markdown 常用子集；所有文本先转义，原始 HTML 只作为文本显示。"""
+    lines = text.splitlines()
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped:
+            i += 1
+        elif stripped.startswith("```"):
+            i += 1
+            code = []
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code.append(lines[i])
+                i += 1
+            i += 1
+            out.append(f"<pre><code>{html.escape(chr(10).join(code))}</code></pre>")
+        elif _HEADING_RE.match(stripped):
+            m = _HEADING_RE.match(stripped)
+            level = len(m.group(1))
+            out.append(f"<h{level}>{_inline(m.group(2))}</h{level}>")
+            i += 1
+        elif stripped.startswith("|"):
+            rows = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                rows.append(lines[i].strip())
+                i += 1
+            out.append(_table(rows))
+        elif _UL_RE.match(line) or _OL_RE.match(line):
+            tag, regex = ("ul", _UL_RE) if _UL_RE.match(line) else ("ol", _OL_RE)
+            items = []
+            while i < len(lines) and regex.match(lines[i]):
+                items.append(f"<li>{_inline(regex.match(lines[i]).group(1))}</li>")
+                i += 1
+            out.append(f"<{tag}>{''.join(items)}</{tag}>")
+        else:
+            para = [stripped]
+            i += 1
+            while (i < len(lines) and lines[i].strip()
+                   and not _starts_block(lines[i])):
+                para.append(lines[i].strip())
+                i += 1
+            out.append(f"<p>{_inline(' '.join(para))}</p>")
+    return "".join(out)
 
 
 # ---------- 工具 ----------
@@ -319,13 +473,16 @@ def push_archive(archive_path, image, tag):
 def set_image_info(arguments):
     image = arguments["image"].strip()
     summary = arguments["summary"].strip()
-    features = arguments["features"].strip()
+    readme = arguments["readme"].strip()
     if not NAME_RE.match(image):
         raise ValueError("image 不是合法的镜像名")
     if not summary:
         raise ValueError("summary 不能为空")
-    if not features:
-        raise ValueError("features 不能为空")
+    if not readme:
+        raise ValueError("readme 不能为空")
+    missing = missing_sections(readme)
+    if missing:
+        raise ValueError("readme 缺少必需节：" + "、".join(missing))
 
     status, _, body = _registry("GET", f"{_repo_url(image)}/tags/list")
     tags = []
@@ -340,11 +497,11 @@ def set_image_info(arguments):
     try:
         with _meta_lock:
             meta = load_meta()
-            meta[image] = {"summary": summary, "features": features}
+            meta[image] = {"summary": summary, "readme": readme}
             save_meta(meta)
     except OSError as exc:
         raise ToolError("META_WRITE_FAILED", str(exc))
-    return {"image": image, "summary": summary, "features": features}
+    return {"image": image, "summary": summary, "readme": readme}
 
 
 def _catalog_repositories():
@@ -365,7 +522,7 @@ def _catalog_repositories():
             "name": name,
             "tags": json.loads(body).get("tags") or [],
             "summary": info.get("summary", ""),
-            "features": info.get("features", ""),
+            "readme": info.get("readme", ""),
         })
     return repositories
 
@@ -382,7 +539,7 @@ def search_images(arguments):
         repo for repo in _catalog_repositories()
         if keyword in repo["name"].lower()
         or keyword in repo["summary"].lower()
-        or keyword in repo["features"].lower()
+        or keyword in repo["readme"].lower()
     ]
     return {"repositories": matched}
 
@@ -397,7 +554,7 @@ def render_images():
     items = []
     for repo in repositories:
         search = " ".join(
-            (repo["name"], repo["summary"], repo["features"])).lower()
+            (repo["name"], repo["summary"], repo["readme"])).lower()
         summary = (html.escape(repo["summary"]) if repo["summary"]
                    else '<span class="muted">未登记</span>')
         items.append(
@@ -405,7 +562,7 @@ def render_images():
             f'<span class="name">{html.escape(repo["name"])}</span>'
             f'<span class="tags">{html.escape(", ".join(repo["tags"]))}</span>'
             f'<div class="summary">{summary}</div>'
-            f'<div class="features">{html.escape(repo["features"])}</div>'
+            f'<div class="readme">{render_markdown(repo["readme"])}</div>'
             '</div>')
     return "".join(items)
 
@@ -446,7 +603,7 @@ def handle_rpc(message, base_url):
     if method == "initialize":
         return ok({"protocolVersion": "2025-06-18",
                    "capabilities": {"tools": {}},
-                   "serverInfo": {"name": "mcpdock", "version": "0.2.0"}})
+                   "serverInfo": {"name": "mcpdock", "version": "0.3.0"}})
     if method == "ping":
         return ok({})
     if method == "tools/list":
@@ -533,7 +690,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         params = urllib.parse.parse_qs(query)
         image = (params.get("image") or [""])[0].strip()
-        tag = (params.get("tag") or [""])[0].strip()
+        tags = list(dict.fromkeys(t.strip() for t in params.get("tag", [])))
         length = self.headers.get("Content-Length")
 
         def fail(status, code, message):
@@ -542,8 +699,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if not NAME_RE.match(image):
             return fail(400, "INVALID_ARGUMENT", "image 不是合法的镜像名")
-        if not TAG_RE.match(tag):
-            return fail(400, "INVALID_ARGUMENT", "tag 不是合法的标签")
+        if not tags:
+            return fail(400, "INVALID_ARGUMENT", "缺少 tag")
+        bad = [t for t in tags if not TAG_RE.match(t)]
+        if bad:
+            return fail(400, "INVALID_ARGUMENT",
+                        "tag 不是合法的标签：" + "、".join(bad))
         if length is None or not length.isdigit():
             return fail(400, "INVALID_ARGUMENT", "缺少 Content-Length")
 
@@ -561,7 +722,7 @@ class Handler(BaseHTTPRequestHandler):
             if remaining > 0:
                 return fail(400, "INVALID_ARGUMENT", "请求体不完整")
             try:
-                result = push_archive(archive, image, tag)
+                result = push_archive(archive, image, tags)
             except ToolError as exc:
                 status = 400 if exc.code == "INVALID_IMAGE_ARCHIVE" else 502
                 return fail(status, exc.code, str(exc))

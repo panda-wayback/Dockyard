@@ -121,26 +121,28 @@ docker build -q -t "$MCP_LOCAL" "$MCP_PROJ" >/dev/null
 docker save -o "$WORK_DIR/mcp.tar" "$MCP_LOCAL"
 docker rmi -f "$MCP_LOCAL" >/dev/null
 RESP="$(curl -s --fail-with-body -T "$WORK_DIR/mcp.tar" \
-  "${MCP}/upload?image=${MCP_REPO}&tag=${TAG}")" || fail "上传失败：$RESP"
+  "${MCP}/upload?image=${MCP_REPO}&tag=${TAG}&tag=latest")" || fail "上传失败：$RESP"
 echo "$RESP" | grep -q "sha256:" || fail "上传未返回 digest：$RESP"
+curl -s "http://${REGISTRY}/v2/${MCP_REPO}/tags/list" | grep -q '"latest"' \
+  || fail "上传后仓库缺少 latest tag"
 docker pull -q "$MCP_IMAGE" >/dev/null || fail "上传的镜像无法 pull"
 CID="$(docker create "$MCP_IMAGE")"
 docker cp "$CID:/README.md" "$WORK_DIR/mcp-readme.md" >/dev/null
 docker rm "$CID" >/dev/null
 cmp -s "$WORK_DIR/mcp-readme.md" "$MCP_PROJ/README.md" || fail "上传镜像内容不一致"
-pass "镜像经 MCP 上传端点推入仓库，可 pull 且内容一致"
+pass "镜像经 MCP 上传端点推入仓库（同时打版本 tag 与 latest），可 pull 且内容一致"
 
 MCP_SUMMARY="演示用问候镜像"
-MCP_FEATURES="内置 README，提供问候与演示功能。"
-ARGS="$(python3 - "$MCP_REPO" "$MCP_SUMMARY" "$MCP_FEATURES" <<'PY'
+MCP_README="$(printf '## 功能\n- 提供问候与演示功能\n\n## 使用\n```yaml\nservices:\n  hello:\n    image: ${REGISTRY}/%s:latest\n```\n\n## 配置\n无环境变量。' "$MCP_REPO")"
+ARGS="$(python3 - "$MCP_REPO" "$MCP_SUMMARY" "$MCP_README" <<'PY'
 import json, sys
 print(json.dumps({"image": sys.argv[1], "summary": sys.argv[2],
-                  "features": sys.argv[3]}))
+                  "readme": sys.argv[3]}))
 PY
 )"
 RESP="$(mcp_call set_image_info "$ARGS")"
 echo "$RESP" | grep -q "$MCP_SUMMARY" || fail "MCP set_image_info 失败：$RESP"
-pass "MCP set_image_info 登记简介"
+pass "MCP set_image_info 登记简介与 README"
 
 # MCP 列表带简介
 RESP="$(mcp_call list_images '{}')"
@@ -148,13 +150,15 @@ echo "$RESP" | grep -q "\"name\": \"${MCP_REPO}\"" || fail "MCP 列表缺少 ${M
 echo "$RESP" | grep -q "$MCP_SUMMARY" || fail "MCP 列表缺少简介：$RESP"
 pass "MCP list_images 返回镜像与简介"
 
-# MCP 按功能说明搜索
+# MCP 按 README 搜索
 RESP="$(mcp_call search_images '{"keyword": "问候"}')"
 echo "$RESP" | grep -q "\"name\": \"${MCP_REPO}\"" || fail "搜索 '问候' 未命中：$RESP"
-pass "MCP search_images 按简介关键字查找"
+pass "MCP search_images 按关键字查找"
 
-curl -s "${MCP}/" | grep -q "$MCP_SUMMARY" || fail "MCP 网页镜像列表缺少简介"
-pass "MCP 网页镜像列表显示简介"
+PAGE="$(curl -s "${MCP}/")"
+echo "$PAGE" | grep -q "$MCP_SUMMARY" || fail "MCP 网页镜像列表缺少简介"
+echo "$PAGE" | grep -q "<h2>功能</h2>" || fail "MCP 网页未渲染 README"
+pass "MCP 网页镜像列表显示简介与渲染后的 README"
 
 # 持久化
 compose down >/dev/null

@@ -59,7 +59,7 @@ docker build -q -t "$LOCAL_IMAGE" "$WORK_DIR/proj" >/dev/null
 docker save -o "$WORK_DIR/image.tar" "$LOCAL_IMAGE"
 printf 'not a tar' > "$WORK_DIR/garbage.tar"
 
-export SPORT WORK_DIR REPO REPO2 TAG PULLED REFERENCE2 CONTENT REGNAME
+export SPORT RPORT WORK_DIR REPO REPO2 TAG PULLED REFERENCE2 CONTENT REGNAME
 
 python3 - <<'PY'
 import json
@@ -70,6 +70,7 @@ import urllib.parse
 import urllib.request
 
 SPORT = os.environ["SPORT"]
+RPORT = os.environ["RPORT"]
 WORK_DIR = os.environ["WORK_DIR"]
 REPO = os.environ["REPO"]
 REPO2 = os.environ["REPO2"]
@@ -99,10 +100,11 @@ def call(name, arguments):
 def payload_of(r):
     return json.loads(r["result"]["content"][0]["text"])
 
-def upload(path, image, tag):
+def upload(path, image, tags):
     with open(path, "rb") as fh:
         data = fh.read()
-    query = urllib.parse.urlencode({"image": image, "tag": tag})
+    query = urllib.parse.urlencode(
+        [("image", image)] + [("tag", t) for t in tags])
     req = urllib.request.Request(
         f"{BASE}/upload?{query}", data=data, method="PUT")
     try:
@@ -114,6 +116,18 @@ def upload(path, image, tag):
 def expect(cond, msg):
     if not cond:
         raise AssertionError(msg)
+
+def registry_tags(image):
+    with urllib.request.urlopen(
+            f"http://localhost:{RPORT}/v2/{image}/tags/list") as resp:
+        return set(json.load(resp).get("tags") or [])
+
+def manifest_digest(image, tag):
+    req = urllib.request.Request(
+        f"http://localhost:{RPORT}/v2/{image}/manifests/{tag}", method="HEAD",
+        headers={"Accept": "application/vnd.oci.image.manifest.v1+json"})
+    with urllib.request.urlopen(req) as resp:
+        return resp.headers["Docker-Content-Digest"]
 
 def page_text():
     with urllib.request.urlopen(f"{BASE}/") as resp:
@@ -146,9 +160,13 @@ r = rpc("tools/list", {})
 tools = {t["name"]: t for t in r["result"]["tools"]}
 expect(set(tools) == {"set_image_info", "list_images", "search_images"},
        f"工具列表异常：{set(tools)}")
-expect(f"{BASE}/upload" in tools["set_image_info"]["description"],
-       "set_image_info 说明缺少上传地址")
-print("PASS: tools/list 返回三个工具，说明含上传地址")
+desc = tools["set_image_info"]["description"]
+expect(f"{BASE}/upload" in desc, "set_image_info 说明缺少上传地址")
+for text in ("## 功能", "## 使用", "## 配置", "${REGISTRY}"):
+    expect(text in desc, f"set_image_info 说明缺少 {text!r}")
+expect(tools["set_image_info"]["inputSchema"]["required"]
+       == ["image", "summary", "readme"], "set_image_info 参数应为 image、summary、readme")
+print("PASS: tools/list 返回三个工具，说明含上传地址、必需节与 ${REGISTRY} 写法")
 
 # 空仓库
 expect(payload_of(call("list_images", {}))["repositories"] == [],
@@ -157,12 +175,18 @@ print("PASS: list_images 空仓库")
 expect("暂无镜像" in page_text(), "空仓库页面应显示暂无镜像")
 print("PASS: GET / 空仓库显示暂无镜像")
 
-# 上传 docker save 文件
-status, body = upload(f"{WORK_DIR}/image.tar", REPO, TAG)
+# 上传 docker save 文件，一次打多个 tag（重复值只算一次）
+status, body = upload(f"{WORK_DIR}/image.tar", REPO, [TAG, "latest", TAG])
 expect(status == 200, f"上传失败：{status} {body}")
-expect(body["image"] == REPO and body["tag"] == TAG, f"上传结果异常：{body}")
+expect(body["image"] == REPO and body["tags"] == [TAG, "latest"],
+       f"上传结果异常：{body}")
 expect(body["digest"].startswith("sha256:"), f"digest 异常：{body}")
-print("PASS: PUT /upload 返回 image、tag、digest")
+print("PASS: PUT /upload 返回 image、去重后的 tags、digest")
+expect(registry_tags(REPO) == {TAG, "latest"},
+       f"仓库 tag 异常：{registry_tags(REPO)}")
+expect(manifest_digest(REPO, TAG) == manifest_digest(REPO, "latest")
+       == body["digest"], "各 tag 应指向同一 manifest")
+print("PASS: 多个 tag 写入仓库且指向同一 manifest")
 
 # 从仓库 pull 回来内容一致
 subprocess.run(["docker", "pull", "-q", PULLED], check=True,
@@ -177,15 +201,41 @@ with open(f"{WORK_DIR}/pulled.txt") as fh:
     expect(fh.read() == CONTENT, "pull 回来的内容与上传的不一致")
 print("PASS: 上传的镜像可 pull 且内容一致")
 
-# 登记简介
+# 登记简介与 README
 SUMMARY = "一个测试用的 hello 镜像"
-FEATURES = "内置 content.txt，输出问候，用于验证上传链路。"
+README = """## 功能
+- 输出问候，用于验证上传链路
+
+## 使用
+```yaml
+services:
+  hello:
+    image: ${REGISTRY}/mcpdock-test/hello:latest
+```
+<script>alert(1)</script>
+
+## 配置
+| 环境变量 | 必填 | 默认值 | 说明 |
+|---|---|---|---|
+| GREETING | 否 | hi | 问候语 |
+
+[文档](https://example.com/doc) [坏链接](javascript:alert(1))"""
 r = call("set_image_info",
-         {"image": REPO, "summary": SUMMARY, "features": FEATURES})
+         {"image": REPO, "summary": SUMMARY, "readme": README})
 expect(not r["result"].get("isError"), f"set_image_info 失败：{r}")
 expect(payload_of(r) == {"image": REPO, "summary": SUMMARY,
-                         "features": FEATURES}, f"登记结果异常：{r}")
-print("PASS: set_image_info 登记简介")
+                         "readme": README}, f"登记结果异常：{r}")
+print("PASS: set_image_info 登记简介与 README")
+
+# README 缺少必需节（围栏代码块内的标题不算）
+r = call("set_image_info", {"image": REPO, "summary": SUMMARY,
+                            "readme": "## 功能\nx\n```\n## 使用\n```"})
+expect(r.get("error", {}).get("code") == -32602
+       and "## 使用" in r["error"]["message"]
+       and "## 配置" in r["error"]["message"]
+       and "## 功能" not in r["error"]["message"],
+       f"缺少必需节应返回 -32602 并列出 ## 使用、## 配置：{r}")
+print("PASS: README 缺少必需节返回参数错误并列出缺少的节")
 
 # 未登记的镜像（直接推送）
 subprocess.run(["docker", "tag", PULLED, REFERENCE2], check=True)
@@ -195,13 +245,13 @@ subprocess.run(["docker", "push", "-q", REFERENCE2], check=True,
 found = {x["name"]: x for x in
          payload_of(call("list_images", {}))["repositories"]}
 entry = found.get(REPO)
-expect(entry is not None and entry["tags"] == [TAG],
-       f"列表中未找到 {REPO}:{TAG}：{found}")
-expect(entry["summary"] == SUMMARY and entry["features"] == FEATURES,
-       f"简介或功能说明异常：{entry}")
+expect(entry is not None and set(entry["tags"]) == {TAG, "latest"},
+       f"列表中未找到 {REPO} 的 tag：{found}")
+expect(entry["summary"] == SUMMARY and entry["readme"] == README,
+       f"简介或 README 异常：{entry}")
 plain = found.get(REPO2)
 expect(plain is not None and plain["summary"] == ""
-       and plain["features"] == "", f"未登记镜像简介应为空：{plain}")
+       and plain["readme"] == "", f"未登记镜像简介应为空：{plain}")
 print("PASS: list_images 返回镜像、tag 与简介，未登记的为空")
 
 # search_images
@@ -213,16 +263,25 @@ names = {x["name"] for x in
 expect(names == {REPO2}, f"搜索 'PLAIN' 应命中 {REPO2}：{names}")
 expect(payload_of(call("search_images", {"keyword": "不存在xyz"}))
        ["repositories"] == [], "无匹配应返回空列表")
-print("PASS: search_images 按名称与简介查找")
+print("PASS: search_images 按名称与 README 查找")
 
 # 网页镜像列表
 page = page_text()
-for text in (REPO, TAG, SUMMARY, "输出问候", REPO2, "未登记"):
+for text in (REPO, TAG, SUMMARY, REPO2, "未登记"):
     expect(text in page, f"页面缺少 {text!r}")
 print("PASS: GET / 列出镜像、tag、简介，未登记的标明未登记")
 
+for text in ("<h2>功能</h2>", "<li>输出问候，用于验证上传链路</li>",
+             "<pre><code>services:", "<th>环境变量</th>", "<td>GREETING</td>",
+             '<a href="https://example.com/doc"',
+             "&lt;script&gt;alert(1)&lt;/script&gt;"):
+    expect(text in page, f"README 渲染缺少 {text!r}")
+expect("<script>alert" not in page and 'href="javascript:' not in page,
+       "README 中的 HTML 与非 http(s) 链接不应生效")
+print("PASS: GET / 按 Markdown 渲染 README，HTML 与非 http(s) 链接按文本显示")
+
 r = call("set_image_info", {"image": REPO2, "summary": "<b>粗体</b>",
-                            "features": "a & b"})
+                            "readme": "## 功能\na\n## 使用\nb\n## 配置\nc"})
 expect(not r["result"].get("isError"), f"登记失败：{r}")
 page = page_text()
 expect("&lt;b&gt;粗体&lt;/b&gt;" in page and "<b>粗体" not in page,
@@ -230,20 +289,27 @@ expect("&lt;b&gt;粗体&lt;/b&gt;" in page and "<b>粗体" not in page,
 print("PASS: GET / 简介内容经 HTML 转义")
 
 # 错误：上传参数不合法
-status, body = upload(f"{WORK_DIR}/image.tar", "Bad Name", TAG)
+status, body = upload(f"{WORK_DIR}/image.tar", "Bad Name", [TAG])
 expect(status == 400 and body["error"] == "INVALID_ARGUMENT",
        f"非法镜像名应返回 400 INVALID_ARGUMENT：{status} {body}")
-print("PASS: 上传非法镜像名返回 INVALID_ARGUMENT")
+status, body = upload(f"{WORK_DIR}/image.tar", REPO, [])
+expect(status == 400 and body["error"] == "INVALID_ARGUMENT",
+       f"没有 tag 应返回 400 INVALID_ARGUMENT：{status} {body}")
+status, body = upload(f"{WORK_DIR}/image.tar", REPO, ["good-tag", "bad tag"])
+expect(status == 400 and body["error"] == "INVALID_ARGUMENT",
+       f"含非法 tag 应返回 400 INVALID_ARGUMENT：{status} {body}")
+expect("good-tag" not in registry_tags(REPO), "含非法 tag 时不应写入任何 tag")
+print("PASS: 上传非法镜像名、没有 tag、含非法 tag 返回 INVALID_ARGUMENT 且不写入")
 
 # 错误：上传内容不是镜像文件
-status, body = upload(f"{WORK_DIR}/garbage.tar", REPO, "bad")
+status, body = upload(f"{WORK_DIR}/garbage.tar", REPO, ["bad"])
 expect(status == 400 and body["error"] == "INVALID_IMAGE_ARCHIVE",
        f"非镜像文件应返回 400 INVALID_IMAGE_ARCHIVE：{status} {body}")
 print("PASS: 上传非镜像文件返回 INVALID_IMAGE_ARCHIVE")
 
 # 错误：登记不存在的镜像
 r = call("set_image_info", {"image": "mcpdock-test/nope",
-                            "summary": SUMMARY, "features": FEATURES})
+                            "summary": SUMMARY, "readme": README})
 expect(r["result"].get("isError")
        and "IMAGE_NOT_FOUND" in r["result"]["content"][0]["text"],
        f"应返回 IMAGE_NOT_FOUND：{r}")
@@ -253,8 +319,11 @@ print("PASS: 登记不存在的镜像返回 IMAGE_NOT_FOUND")
 r = call("set_image_info", {})
 expect(r["error"]["code"] == -32602, f"缺少参数应返回 -32602：{r}")
 r = call("set_image_info", {"image": REPO, "summary": "  ",
-                            "features": FEATURES})
+                            "readme": README})
 expect(r["error"]["code"] == -32602, f"空白 summary 应返回 -32602：{r}")
+r = call("set_image_info", {"image": REPO, "summary": SUMMARY,
+                            "readme": "  "})
+expect(r["error"]["code"] == -32602, f"空白 readme 应返回 -32602：{r}")
 r = call("search_images", {"keyword": "  "})
 expect(r["error"]["code"] == -32602, f"空白 keyword 应返回 -32602：{r}")
 print("PASS: 参数缺失或空白返回 -32602")
