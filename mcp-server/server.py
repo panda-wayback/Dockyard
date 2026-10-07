@@ -58,11 +58,20 @@ CONFIG_PAGE = """<!doctype html>
   #status { margin-left: 10px; color: #059669; }
   .hint { margin-top: 20px; color: #6b7280; font-size: 14px; line-height: 1.6; }
   h2 { font-size: 18px; margin-top: 40px; }
-  .img { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px;
-         margin: 12px 0; }
+  .img { border: 1px solid #e5e7eb; border-radius: 8px; margin: 12px 0;
+         padding: 0; }
+  .img > summary { list-style: none; cursor: pointer; padding: 12px 16px;
+                   position: relative; padding-right: 44px; }
+  .img > summary::-webkit-details-marker { display: none; }
+  .img > summary::after { content: "▸"; position: absolute; right: 16px;
+                          top: 50%; transform: translateY(-50%);
+                          color: #9ca3af; font-size: 14px; }
+  .img[open] > summary { border-bottom: 1px solid #e5e7eb; }
+  .img[open] > summary::after { content: "▾"; }
   .img .name { font-weight: 600; font-size: 16px; }
   .img .tags { margin-left: 8px; color: #6b7280; font-size: 13px; }
-  .img .summary { margin: 8px 0 4px; }
+  .img .summary { margin: 8px 0 0; }
+  .img .readme { padding: 12px 16px; }
   .readme { color: #374151; font-size: 14px; line-height: 1.6; }
   .readme h1, .readme h2, .readme h3, .readme h4, .readme h5, .readme h6 {
     font-size: 15px; margin: 14px 0 6px; }
@@ -672,12 +681,14 @@ def render_images():
         summary = (html.escape(repo["summary"]) if repo["summary"]
                    else '<span class="muted">未登记</span>')
         items.append(
-            f'<div class="img" data-search="{html.escape(search)}">'
+            f'<details class="img" data-search="{html.escape(search)}">'
+            '<summary>'
             f'<span class="name">{html.escape(repo["name"])}</span>'
             f'<span class="tags">{html.escape(", ".join(repo["tags"]))}</span>'
             f'<div class="summary">{summary}</div>'
+            '</summary>'
             f'<div class="readme">{render_markdown(repo["readme"])}</div>'
-            '</div>')
+            '</details>')
     return "".join(items)
 
 

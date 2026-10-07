@@ -326,7 +326,10 @@ print("PASS: search_images 按名称与 README 查找")
 page = page_text()
 for text in (REPO, TAG, SUMMARY, REPO2, "未登记"):
     expect(text in page, f"页面缺少 {text!r}")
-print("PASS: GET / 列出镜像、tag、简介，未登记的标明未登记")
+expect('<details class="img" data-search=' in page and "<summary>" in page,
+       "镜像应渲染为 details/summary 折叠卡片")
+expect("img\" open" not in page, "镜像默认应收起（details 不带 open）")
+print("PASS: GET / 列出镜像、tag、简介，未登记的标明未登记，README 默认折叠")
 
 for text in ("<h2>功能</h2>", "<li>输出问候，用于验证上传链路</li>",
              "<pre><code>services:", "<th>环境变量</th>", "<td>GREETING</td>",

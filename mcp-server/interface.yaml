@@ -61,7 +61,7 @@ output:
 
 contract:
   - GET / 返回 HTML 页面；页面按填写的网址生成 {"mcpServers":{"mcpdock":{"url":"<网址>/mcp"}}}，网址默认取当前页面访问地址，服务端不保存该配置。
-  - GET / 的镜像列表包含请求时 list_images 返回的全部镜像，显示镜像名、tag、summary 与 readme；未登记简介的镜像显示「未登记」；仓库为空时显示「暂无镜像」。
+  - GET / 的镜像列表包含请求时 list_images 返回的全部镜像，每项默认显示镜像名、tag 与 summary，README 收起；点击该镜像展开完整 README，再点收起，各镜像互不影响；未登记简介的镜像显示「未登记」；仓库为空时显示「暂无镜像」。
   - GET / 的 readme 按 Markdown 渲染：# 至 ###### 标题、段落、- / * / 1. 列表、``` 围栏代码块、`行内代码`、**粗体**、| 表格、[文字](链接)。summary 与 readme 中的 HTML 一律转义为文本；链接仅 http/https 渲染为超链接，其它协议按文本显示。
   - 镜像列表的筛选框在浏览器端按 search_images 相同规则（name、summary、readme 原文大小写不敏感子串）即时隐藏不匹配的镜像。
   - REGISTRY_API 不可达时 GET / 仍返回 200 与配置区，镜像列表处显示「仓库不可访问」及原因。
