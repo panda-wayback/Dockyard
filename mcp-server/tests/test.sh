@@ -166,7 +166,8 @@ expect(set(tools) == {"set_image_info", "list_images", "search_images"},
 desc = tools["set_image_info"]["description"]
 expect(f"{BASE}/upload" in desc, "set_image_info 说明缺少上传地址")
 for text in ("--platform linux/amd64", "## 功能", "## 使用", "## 配置", "${REGISTRY}",
-             "pull_policy: always", "./data:", "禁止命名卷", "绝对路径"):
+             "pull_policy: always", "./data:", "禁止命名卷", "绝对路径",
+             "%Y%m%d-%H%M%S", "git rev-parse --short HEAD"):
     expect(text in desc, f"set_image_info 说明缺少 {text!r}")
 expect(tools["set_image_info"]["inputSchema"]["required"]
        == ["image", "summary", "readme"], "set_image_info 参数应为 image、summary、readme")

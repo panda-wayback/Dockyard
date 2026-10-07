@@ -155,8 +155,11 @@ def tools_for(base_url):
             "description": (
                 "登记 MCPDock 私有仓库中镜像的一句话简介 summary 与镜像 README readme。"
                 "把项目镜像上传到仓库的完整流程（在用户本机执行命令）：\n"
-                "1. 确定版本 tag：优先取项目版本号（如 package.json、pyproject.toml "
-                "中的 version），没有则取 git rev-parse --short HEAD；"
+                "1. 确定版本 tag：在项目目录执行 "
+                "VERSION=\"$(git show -s --format=%cd --date=format:%Y%m%d-%H%M%S HEAD)"
+                "-$(git rev-parse --short HEAD)\"，得到格式为 "
+                "YYYYMMDD-HHMMSS-<短哈希> 的 tag（如 20261007-190032-6f0bddf，"
+                "前缀为该 commit 的提交时间，后缀为短哈希）；"
                 "每次上传同时打版本 tag 与 latest。\n"
                 f"2. docker build --platform {PLATFORM} -t <image>:<版本> <项目目录>"
                 f"（上传只接受 {PLATFORM} 镜像，macOS 上也必须带 --platform）\n"
